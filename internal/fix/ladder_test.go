@@ -6,6 +6,7 @@ import (
 
 	"github.com/SaiPisey2/kubectl-survive/internal/spread"
 	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/yaml"
 )
 
 func TestRung1AddsAnEnforcedSpreadWhenThereIsNone(t *testing.T) {
@@ -109,6 +110,114 @@ func TestCandidatesAreReturnedInRungOrder(t *testing.T) {
 	for i := 1; i < len(got); i++ {
 		if got[i-1].Rung > got[i].Rung {
 			t.Fatalf("rungs out of order: %v", rungsOf(got))
+		}
+	}
+}
+
+func TestRung1DoesNotFireForAWorkloadWithNoIdentifyingLabels(t *testing.T) {
+	// An empty-but-present LabelSelector matches every pod in the namespace,
+	// not none. Offering rung 1 here would hand the operator a patch that
+	// silently captures every unrelated workload sharing the namespace — a
+	// far more disruptive change than the one being recommended. A workload
+	// with no identifying labels cannot be given a safe spread constraint at
+	// all, so the rung must not fire.
+	got := Candidates(Input{
+		Verdict: verdictWithSpread(spread.StateAbsent), Template: templateWithLabels(nil),
+		Replicas: 3, DomainKey: zoneKey, Domains: []string{"zone-a", "zone-b", "zone-c"},
+		Selector: nil,
+	})
+	if findRung(got, RungSpreadAdd) != nil {
+		t.Fatal("rung 1 must not fire without an identifying selector; it would generate an empty LabelSelector matching every pod in the namespace")
+	}
+
+	got = Candidates(Input{
+		Verdict: verdictWithSpread(spread.StateAbsent), Template: templateWithLabels(nil),
+		Replicas: 3, DomainKey: zoneKey, Domains: []string{"zone-a", "zone-b", "zone-c"},
+		Selector: map[string]string{},
+	})
+	if findRung(got, RungSpreadAdd) != nil {
+		t.Fatal("rung 1 must not fire for an empty (but non-nil) selector either")
+	}
+}
+
+func TestPatchesNeverContainGoMapFormatting(t *testing.T) {
+	inputs := []Input{
+		inputFor(templateWithLabels(map[string]string{"app": "web", "env": "prod", "tier": "fe"}), spread.StateAbsent, 3),
+		inputFor(templateWithSpread(corev1.ScheduleAnyway, 5), spread.StateAdvisory, 3),
+		inputFor(templateWithSpread(corev1.DoNotSchedule, 3), spread.StateEnforcedButWeak, 3),
+		{
+			Verdict: verdictWithSpread(spread.StateAbsent), Template: templateWithLabels(nil),
+			Replicas: 1, DomainKey: zoneKey, Domains: []string{"zone-a", "zone-b", "zone-c"},
+		},
+	}
+	for _, in := range inputs {
+		for _, f := range Candidates(in) {
+			if strings.Contains(f.Patch, "map[") {
+				t.Fatalf("rung %d patch contains Go map formatting, not YAML:\n%s", f.Rung, f.Patch)
+			}
+		}
+	}
+}
+
+func TestRung1PatchRendersEachLabelOnItsOwnLineInSortedOrder(t *testing.T) {
+	got := Candidates(Input{
+		Verdict:   verdictWithSpread(spread.StateAbsent),
+		Template:  templateWithLabels(map[string]string{"tier": "fe", "app": "web", "env": "prod"}),
+		Replicas:  3,
+		DomainKey: zoneKey,
+		Domains:   []string{"zone-a", "zone-b", "zone-c"},
+		Selector:  map[string]string{"tier": "fe", "app": "web", "env": "prod"},
+	})
+	f := mustFindRung(t, got, RungSpreadAdd)
+
+	want := []string{"app: web", "env: prod", "tier: fe"}
+	lastIdx := -1
+	for _, w := range want {
+		idx := strings.Index(f.Patch, w)
+		if idx == -1 {
+			t.Fatalf("patch missing label line %q:\n%s", w, f.Patch)
+		}
+		if idx <= lastIdx {
+			t.Fatalf("label lines are not in sorted order in patch:\n%s", f.Patch)
+		}
+		lastIdx = idx
+	}
+}
+
+// finalYAML strips the unified-diff marker byte from every kept (' ' or '+')
+// line of a patch, discarding removed ('-') lines, to reproduce the document
+// that results after the patch is applied.
+func finalYAML(patch string) string {
+	var out []string
+	for _, line := range strings.Split(strings.TrimRight(patch, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		marker, rest := line[0], line[1:]
+		if marker == '-' {
+			continue
+		}
+		out = append(out, rest)
+	}
+	return strings.Join(out, "\n")
+}
+
+func TestGeneratedPatchesAreWellFormedYAML(t *testing.T) {
+	inputs := []Input{
+		inputFor(templateWithLabels(map[string]string{"app": "web", "env": "prod"}), spread.StateAbsent, 3),
+		inputFor(templateWithSpread(corev1.ScheduleAnyway, 5), spread.StateAdvisory, 3),
+		inputFor(templateWithSpread(corev1.DoNotSchedule, 3), spread.StateEnforcedButWeak, 3),
+		{
+			Verdict: verdictWithSpread(spread.StateAbsent), Template: templateWithLabels(nil),
+			Replicas: 1, DomainKey: zoneKey, Domains: []string{"zone-a", "zone-b", "zone-c"},
+		},
+	}
+	for _, in := range inputs {
+		for _, f := range Candidates(in) {
+			var doc map[string]interface{}
+			if err := yaml.Unmarshal([]byte(finalYAML(f.Patch)), &doc); err != nil {
+				t.Fatalf("rung %d patch is not well-formed YAML: %v\n%s", f.Rung, err, f.Patch)
+			}
 		}
 	}
 }

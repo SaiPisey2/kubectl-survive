@@ -3,6 +3,7 @@ package fix
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/SaiPisey2/kubectl-survive/internal/survive"
 	corev1 "k8s.io/api/core/v1"
@@ -55,10 +56,53 @@ func Candidates(in Input) []Fix {
 	return out
 }
 
-// rung1SpreadAdd fires only when there are at least two replicas to spread
-// and no constraint exists yet for the domain key under test.
+// patchLine is one line of a unified-diff-style patch: a single leading
+// marker byte (' ' for context, '+' for added, '-' for removed) followed by
+// the YAML content at its natural indentation. Rendering this way — rather
+// than interpolating a Go value into a format string — is what keeps every
+// patch body real, appliable YAML: stripping the marker byte from every kept
+// (' ' or '+') line reproduces the resulting document exactly.
+type patchLine struct {
+	marker byte
+	text   string
+}
+
+func renderPatch(lines []patchLine) string {
+	var sb strings.Builder
+	for _, l := range lines {
+		sb.WriteByte(l.marker)
+		sb.WriteString(l.text)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
+// sortedKeys returns m's keys in sorted order, so rendered YAML never depends
+// on Go's randomised map iteration order.
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// rung1SpreadAdd fires only when there are at least two replicas to spread,
+// the workload has at least one identifying label, and no constraint exists
+// yet for the domain key under test.
+//
+// A workload with no identifying labels is refused rather than given a
+// constraint with an empty selector: an empty-but-present LabelSelector
+// matches every pod in the namespace, not none, so a patch generated for one
+// workload would silently constrain every unrelated pod sharing its
+// namespace — a far more disruptive change than the one being recommended,
+// and one the operator did not ask for.
 func rung1SpreadAdd(in Input) (Fix, bool) {
 	if in.Replicas < 2 {
+		return Fix{}, false
+	}
+	if len(in.Selector) == 0 {
 		return Fix{}, false
 	}
 	if spreadForDomain(in.Template, in.DomainKey) != -1 {
@@ -66,27 +110,35 @@ func rung1SpreadAdd(in Input) (Fix, bool) {
 	}
 
 	selector := in.Selector
+	domainKey := in.DomainKey
+
+	lines := []patchLine{
+		{' ', "spec:"},
+		{' ', "  template:"},
+		{' ', "    spec:"},
+		{' ', "      topologySpreadConstraints:"},
+		{'+', "      - maxSkew: 1"},
+		{'+', fmt.Sprintf("        topologyKey: %s", domainKey)},
+		{'+', "        whenUnsatisfiable: DoNotSchedule"},
+		{'+', "        labelSelector:"},
+		{'+', "          matchLabels:"},
+	}
+	for _, k := range sortedKeys(selector) {
+		lines = append(lines, patchLine{'+', fmt.Sprintf("            %s: %s", k, selector[k])})
+	}
+
 	return Fix{
 		Rung:  RungSpreadAdd,
-		Title: fmt.Sprintf("Add an enforced topology spread constraint on %s", in.DomainKey),
+		Title: fmt.Sprintf("Add an enforced topology spread constraint on %s", domainKey),
 		Mutate: func(t *corev1.PodTemplateSpec) {
 			t.Spec.TopologySpreadConstraints = append(t.Spec.TopologySpreadConstraints, corev1.TopologySpreadConstraint{
 				MaxSkew:           1,
-				TopologyKey:       in.DomainKey,
+				TopologyKey:       domainKey,
 				WhenUnsatisfiable: corev1.DoNotSchedule,
 				LabelSelector:     &metav1.LabelSelector{MatchLabels: selector},
 			})
 		},
-		Patch: fmt.Sprintf(`spec:
-  template:
-    spec:
-      topologySpreadConstraints:
-      + - maxSkew: 1
-      +   topologyKey: %s
-      +   whenUnsatisfiable: DoNotSchedule
-      +   labelSelector:
-      +     matchLabels: %v
-`, in.DomainKey, selector),
+		Patch: renderPatch(lines),
 	}, true
 }
 
@@ -112,14 +164,15 @@ func rung2SpreadEnforce(in Input) (Fix, bool) {
 			}
 			t.Spec.TopologySpreadConstraints[i].WhenUnsatisfiable = corev1.DoNotSchedule
 		},
-		Patch: fmt.Sprintf(`spec:
-  template:
-    spec:
-      topologySpreadConstraints:
-        - topologyKey: %s
-      -   whenUnsatisfiable: ScheduleAnyway
-      +   whenUnsatisfiable: DoNotSchedule
-`, domainKey),
+		Patch: renderPatch([]patchLine{
+			{' ', "spec:"},
+			{' ', "  template:"},
+			{' ', "    spec:"},
+			{' ', "      topologySpreadConstraints:"},
+			{' ', fmt.Sprintf("        - topologyKey: %s", domainKey)},
+			{'-', "          whenUnsatisfiable: ScheduleAnyway"},
+			{'+', "          whenUnsatisfiable: DoNotSchedule"},
+		}),
 	}, true
 }
 
@@ -147,14 +200,15 @@ func rung3SpreadTighten(in Input) (Fix, bool) {
 			}
 			t.Spec.TopologySpreadConstraints[i].MaxSkew = 1
 		},
-		Patch: fmt.Sprintf(`spec:
-  template:
-    spec:
-      topologySpreadConstraints:
-        - topologyKey: %s
-      -   maxSkew: %d
-      +   maxSkew: 1
-`, domainKey, current),
+		Patch: renderPatch([]patchLine{
+			{' ', "spec:"},
+			{' ', "  template:"},
+			{' ', "    spec:"},
+			{' ', "      topologySpreadConstraints:"},
+			{' ', fmt.Sprintf("        - topologyKey: %s", domainKey)},
+			{'-', fmt.Sprintf("          maxSkew: %d", current)},
+			{'+', "          maxSkew: 1"},
+		}),
 	}, true
 }
 
@@ -173,9 +227,10 @@ func rung4ReplicasRaise(in Input) (Fix, bool) {
 		Title:    fmt.Sprintf("Raise replicas to %d to match the domain count", target),
 		Mutate:   nil,
 		Replicas: target,
-		Patch: fmt.Sprintf(`spec:
-- replicas: %d
-+ replicas: %d
-`, in.Replicas, target),
+		Patch: renderPatch([]patchLine{
+			{' ', "spec:"},
+			{'-', fmt.Sprintf("  replicas: %d", in.Replicas)},
+			{'+', fmt.Sprintf("  replicas: %d", target)},
+		}),
 	}, true
 }
