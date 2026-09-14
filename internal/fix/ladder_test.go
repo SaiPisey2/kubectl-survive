@@ -149,6 +149,11 @@ func TestPatchesNeverContainGoMapFormatting(t *testing.T) {
 			Verdict: verdictWithSpread(spread.StateAbsent), Template: templateWithLabels(nil),
 			Replicas: 1, DomainKey: zoneKey, Domains: []string{"zone-a", "zone-b", "zone-c"},
 		},
+		func() Input {
+			in := inputFor(templateWithLabels(map[string]string{"app": "s"}), spread.StateAbsent, 1)
+			in.PDB = pdbMinAvailable(1)
+			return in
+		}(),
 	}
 	for _, in := range inputs {
 		for _, f := range Candidates(in) {
@@ -202,6 +207,66 @@ func finalYAML(patch string) string {
 	return strings.Join(out, "\n")
 }
 
+func TestRung5AddsASatisfiableBudget(t *testing.T) {
+	in := inputFor(templateWithLabels(map[string]string{"app": "web"}), spread.StateEnforced, 3)
+	in.PDB = nil
+	f := mustFindRung(t, Candidates(in), RungPDBAdd)
+	if !strings.Contains(f.Patch, "maxUnavailable") {
+		t.Fatalf("prefer maxUnavailable: it stays satisfiable as replicas change: %q", f.Patch)
+	}
+	if f.ImprovesSurvivability {
+		t.Fatal("a PDB does not protect against a zone vanishing; claiming otherwise is the dishonesty spec 6.2 forbids")
+	}
+}
+
+func TestRung6RepairsAnUnsatisfiableBudget(t *testing.T) {
+	// minAvailable=1 with replicas=1 can never be satisfied: no pod is ever
+	// evictable and any drain touching it hangs forever.
+	in := inputFor(templateWithLabels(map[string]string{"app": "s"}), spread.StateAbsent, 1)
+	in.PDB = pdbMinAvailable(1)
+	fixes := Candidates(in)
+
+	repair := mustFindRung(t, fixes, RungPDBRepair)
+	if !strings.Contains(repair.Patch, "maxUnavailable") {
+		t.Fatalf("the repair must replace minAvailable with a satisfiable budget: %q", repair.Patch)
+	}
+	if repair.ImprovesSurvivability {
+		t.Fatal("repairing a budget unblocks drains; it does not make a single-zone workload survive")
+	}
+
+	// Raising replicas is the fix that does both, and must be offered too.
+	raise := mustFindRung(t, fixes, RungReplicasRaise)
+	if !raise.ImprovesSurvivability {
+		t.Fatal("more replicas across more domains is a survivability fix")
+	}
+}
+
+func TestRung5IsNotOfferedWhenABudgetAlreadyExists(t *testing.T) {
+	in := inputFor(templateWithLabels(nil), spread.StateEnforced, 3)
+	in.PDB = pdbMaxUnavailable(1)
+	if findRung(Candidates(in), RungPDBAdd) != nil {
+		t.Fatal("rung 5 must not duplicate an existing budget")
+	}
+}
+
+// The same trap rung 1 was fixed to avoid: an empty-but-present selector on
+// a PDB matches every pod in the namespace, and an unsatisfiable one hangs
+// every drain touching any of those pods, not just the workload the
+// operator meant to help. Rung 5 must refuse to fire without identifying
+// labels, exactly like rung 1.
+func TestRung5DoesNotFireForAWorkloadWithNoIdentifyingLabels(t *testing.T) {
+	in := inputFor(templateWithLabels(nil), spread.StateEnforced, 3)
+	in.Selector = nil
+	if findRung(Candidates(in), RungPDBAdd) != nil {
+		t.Fatal("rung 5 must not fire without an identifying selector; it would generate a PDB matching every pod in the namespace")
+	}
+
+	in.Selector = map[string]string{}
+	if findRung(Candidates(in), RungPDBAdd) != nil {
+		t.Fatal("rung 5 must not fire for an empty (but non-nil) selector either")
+	}
+}
+
 func TestGeneratedPatchesAreWellFormedYAML(t *testing.T) {
 	inputs := []Input{
 		inputFor(templateWithLabels(map[string]string{"app": "web", "env": "prod"}), spread.StateAbsent, 3),
@@ -211,6 +276,11 @@ func TestGeneratedPatchesAreWellFormedYAML(t *testing.T) {
 			Verdict: verdictWithSpread(spread.StateAbsent), Template: templateWithLabels(nil),
 			Replicas: 1, DomainKey: zoneKey, Domains: []string{"zone-a", "zone-b", "zone-c"},
 		},
+		func() Input {
+			in := inputFor(templateWithLabels(map[string]string{"app": "s"}), spread.StateAbsent, 1)
+			in.PDB = pdbMinAvailable(1)
+			return in
+		}(),
 	}
 	for _, in := range inputs {
 		for _, f := range Candidates(in) {

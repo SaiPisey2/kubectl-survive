@@ -40,6 +40,16 @@ type Fix struct {
 
 	// Architectural, when set, explains why no patch can solve this.
 	Architectural string
+
+	// ImprovesSurvivability reports whether applying this fix changes the
+	// domain verdict (a pod stays up when the domain is lost), as opposed to
+	// merely unblocking a drain. There is no default: every rung sets this
+	// explicitly, because a fix whose claim is implicit is a fix nobody
+	// checked. A PodDisruptionBudget rung (5, 6) never sets this true — a
+	// budget is not consulted when a zone vanishes, so it answers "does a
+	// drain hang", not "does this survive the zone dying". Rung 8 is a
+	// reported finding, not a fix, and is false for the same reason.
+	ImprovesSurvivability bool
 }
 
 // Fixable reports whether this rung produces a patch at all. Rung 4 has no

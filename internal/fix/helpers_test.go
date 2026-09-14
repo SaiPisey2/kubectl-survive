@@ -6,7 +6,9 @@ import (
 	"github.com/SaiPisey2/kubectl-survive/internal/survive"
 	"github.com/SaiPisey2/kubectl-survive/internal/workload"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // zoneKey is the domain key used by every test in this package that does not
@@ -67,6 +69,22 @@ func inputFor(tmpl *corev1.PodTemplateSpec, state spread.State, replicas int) In
 		Domains:   []string{"zone-a", "zone-b", "zone-c"},
 		Selector:  map[string]string{"app": "web"},
 	}
+}
+
+// pdbMinAvailable builds a PodDisruptionBudget carrying only a minAvailable
+// field, for rung 6 tests. Its selector is left unset: rung 6's synthetic
+// satisfiability check aligns the selector with the Input under test rather
+// than trusting whatever selector the caller's PDB happens to carry.
+func pdbMinAvailable(n int32) *policyv1.PodDisruptionBudget {
+	v := intstr.FromInt32(n)
+	return &policyv1.PodDisruptionBudget{Spec: policyv1.PodDisruptionBudgetSpec{MinAvailable: &v}}
+}
+
+// pdbMaxUnavailable builds a PodDisruptionBudget carrying only a
+// maxUnavailable field, for rung 5 tests.
+func pdbMaxUnavailable(n int32) *policyv1.PodDisruptionBudget {
+	v := intstr.FromInt32(n)
+	return &policyv1.PodDisruptionBudget{Spec: policyv1.PodDisruptionBudgetSpec{MaxUnavailable: &v}}
 }
 
 // findRung returns the fix at the given rung, or nil if none was generated.
