@@ -28,6 +28,12 @@ func node(name, zone string) *corev1.Node {
 			UID:  types.UID(name),
 			Labels: map[string]string{
 				domain.LabelZone: zone,
+				// Hostname topology is what pod anti-affinity is usually written
+				// against. A node missing this label is silently skipped by the
+				// spread and affinity plugins, so an omission here would make
+				// later tests pass or fail for reasons unrelated to what they
+				// are testing.
+				corev1.LabelHostname: name,
 			},
 		},
 		Status: corev1.NodeStatus{
