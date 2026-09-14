@@ -28,6 +28,19 @@ if hits=$(git grep -In -i "$PATTERN" -- $files 2>/dev/null); then
   status=1
 fi
 
+# Process and planning material must never become tracked. These files name the
+# tooling used to build the project; they are kept locally and deliberately not
+# published. Ignoring them is a convenience that one `git add -A` defeats, so
+# this is the actual control.
+for path in $(git ls-files); do
+  case "$path" in
+    docs/*|.superpowers/*|*/.superpowers/*)
+      echo "ERROR: $path is tracked; process material must not be committed"
+      status=1
+      ;;
+  esac
+done
+
 # Commit messages, when a base revision is given or discoverable.
 if [ -z "$BASE" ]; then
   BASE=$(git rev-parse --verify -q origin/main 2>/dev/null || echo "")
