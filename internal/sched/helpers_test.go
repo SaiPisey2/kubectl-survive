@@ -119,11 +119,14 @@ func snapshotWith(nodes []*corev1.Node, pods []*corev1.Pod) *snapshot.Snapshot {
 
 // mustNew calls New and fails the test immediately on error, for tests whose
 // focus is downstream of a working framework.
-func mustNew(t *testing.T, nodes []*corev1.Node, pods []*corev1.Pod) *Scheduler {
+func mustNew(t *testing.T, snap *snapshot.Snapshot) *Scheduler {
 	t.Helper()
-	s, err := New(context.Background(), snapshotWith(nodes, pods))
+	s, err := New(context.Background(), snap)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	return s
 }
+
+// zoneKey is the topology key later tasks use to talk about the zone domain.
+const zoneKey = domain.LabelZone
