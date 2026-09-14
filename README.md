@@ -13,6 +13,9 @@ tells you what actually stops serving.
 
 ## Install
 
+Download a binary for your platform from the
+[releases page](https://github.com/SaiPisey2/kubectl-survive/releases), or:
+
 ```sh
 go install github.com/SaiPisey2/kubectl-survive/cmd/kubectl-survive@latest
 ```
@@ -23,6 +26,9 @@ Or build from source:
 git clone https://github.com/SaiPisey2/kubectl-survive
 cd kubectl-survive && make build
 ```
+
+Put `kubectl-survive` on your `PATH` and kubectl picks it up as `kubectl survive`.
+Check what you have with `kubectl survive version`.
 
 ## Use
 

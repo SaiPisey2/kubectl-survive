@@ -1,0 +1,73 @@
+version: 2
+
+project_name: kubectl-survive
+
+before:
+  hooks:
+    - go mod tidy
+    - go vet ./...
+
+builds:
+  - id: kubectl-survive
+    main: ./cmd/kubectl-survive
+    binary: kubectl-survive
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/SaiPisey2/kubectl-survive/internal/version.version={{ .Version }}
+      - -X github.com/SaiPisey2/kubectl-survive/internal/version.commit={{ .FullCommit }}
+      - -X github.com/SaiPisey2/kubectl-survive/internal/version.date={{ .CommitDate }}
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    ids: [kubectl-survive]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # krew requires the licence to travel inside the archive.
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - artifacts: archive
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  draft: false
+  prerelease: auto
+
+krews:
+  - name: survive
+    ids: [default]
+    homepage: https://github.com/SaiPisey2/kubectl-survive
+    short_description: Report which workloads lose availability if a zone is lost
+    description: |
+      Reads real pod placement rather than declared intent, removes a failure
+      domain, and reports which workloads stop serving. Also detects
+      PodDisruptionBudgets that can never be satisfied and so hang node drains.
+      Read-only: it never evicts, cordons or deletes anything.
+    # The manifest is rendered into dist/ for a manual krew-index pull request.
+    # Nothing is pushed: krew-index submission is reviewed by humans.
+    skip_upload: true
