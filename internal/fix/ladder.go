@@ -7,6 +7,7 @@ import (
 
 	"github.com/SaiPisey2/kubectl-survive/internal/pdbcheck"
 	"github.com/SaiPisey2/kubectl-survive/internal/snapshot"
+	"github.com/SaiPisey2/kubectl-survive/internal/spread"
 	"github.com/SaiPisey2/kubectl-survive/internal/survive"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -46,14 +47,25 @@ func spreadForDomain(t *corev1.PodTemplateSpec, domainKey string) int {
 func Candidates(in Input) []Fix {
 	var out []Fix
 
-	if f, ok := rung1SpreadAdd(in); ok {
-		out = append(out, f)
-	}
-	if f, ok := rung2SpreadEnforce(in); ok {
-		out = append(out, f)
-	}
-	if f, ok := rung3SpreadTighten(in); ok {
-		out = append(out, f)
+	// A pod pinned to a domain by its volume cannot be moved by a placement
+	// fix: no spread constraint or anti-affinity rule changes where a
+	// zone-pinned PVC's PV lives. Offering rungs 1, 2, 3 or 7 here would be a
+	// fix that provably cannot work, and would waste the operator's
+	// attention even though the scheduler proof would reject it later.
+	// Rungs 4, 5 and 6 still apply: more replicas and a working drain budget
+	// remain useful even when one replica is immovable.
+	pinned := len(in.Verdict.VolumePins) > 0
+
+	if !pinned {
+		if f, ok := rung1SpreadAdd(in); ok {
+			out = append(out, f)
+		}
+		if f, ok := rung2SpreadEnforce(in); ok {
+			out = append(out, f)
+		}
+		if f, ok := rung3SpreadTighten(in); ok {
+			out = append(out, f)
+		}
 	}
 	if f, ok := rung4ReplicasRaise(in); ok {
 		out = append(out, f)
@@ -62,6 +74,14 @@ func Candidates(in Input) []Fix {
 		out = append(out, f)
 	}
 	if f, ok := rung6PDBRepair(in); ok {
+		out = append(out, f)
+	}
+	if !pinned {
+		if f, ok := rung7AntiAffinity(in); ok {
+			out = append(out, f)
+		}
+	}
+	if f, ok := rung8VolumePin(in); ok {
 		out = append(out, f)
 	}
 
@@ -415,5 +435,93 @@ func rung6PDBRepair(in Input) (Fix, bool) {
 			{'-', removed},
 			{'+', "  maxUnavailable: 1"},
 		}),
+	}, true
+}
+
+// rung7AntiAffinity fires when the workload's pod anti-affinity for the
+// domain key under test is advisory: a preferred term only affects
+// scheduler scoring, so a full node (or a full domain, under enough
+// pressure) can still land every replica together. It promotes the matching
+// preferred term to required and removes it from the preferred list, rather
+// than duplicating it: keeping both would double-count a constraint that is
+// now enforced unconditionally.
+func rung7AntiAffinity(in Input) (Fix, bool) {
+	if in.Verdict.AntiAffinity.State != spread.StateAdvisory {
+		return Fix{}, false
+	}
+
+	domainKey := in.DomainKey
+	aa := in.Template.Spec.Affinity
+	if aa == nil || aa.PodAntiAffinity == nil {
+		return Fix{}, false
+	}
+
+	var matched *corev1.PodAffinityTerm
+	for _, w := range aa.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution {
+		if w.PodAffinityTerm.TopologyKey == domainKey {
+			term := w.PodAffinityTerm
+			matched = &term
+			break
+		}
+	}
+	if matched == nil {
+		return Fix{}, false
+	}
+
+	return Fix{
+		Rung:                  RungAntiAffinity,
+		Title:                 fmt.Sprintf("Require pod anti-affinity on %s instead of preferring it", domainKey),
+		ImprovesSurvivability: true,
+		Mutate: func(t *corev1.PodTemplateSpec) {
+			if t.Spec.Affinity == nil || t.Spec.Affinity.PodAntiAffinity == nil {
+				return
+			}
+			paa := t.Spec.Affinity.PodAntiAffinity
+			var kept []corev1.WeightedPodAffinityTerm
+			for _, w := range paa.PreferredDuringSchedulingIgnoredDuringExecution {
+				if w.PodAffinityTerm.TopologyKey == domainKey {
+					paa.RequiredDuringSchedulingIgnoredDuringExecution = append(
+						paa.RequiredDuringSchedulingIgnoredDuringExecution, w.PodAffinityTerm)
+					continue
+				}
+				kept = append(kept, w)
+			}
+			paa.PreferredDuringSchedulingIgnoredDuringExecution = kept
+		},
+		Patch: renderPatch([]patchLine{
+			{' ', "spec:"},
+			{' ', "  template:"},
+			{' ', "    spec:"},
+			{' ', "      affinity:"},
+			{' ', "        podAntiAffinity:"},
+			{'-', "          preferredDuringSchedulingIgnoredDuringExecution:"},
+			{'+', "          requiredDuringSchedulingIgnoredDuringExecution:"},
+			{' ', fmt.Sprintf("          - topologyKey: %s", domainKey)},
+		}),
+	}, true
+}
+
+// rung8VolumePin fires whenever the workload has any zonal volume pin. It is
+// never a patch: moving a zonal disk is a data migration, not a scheduling
+// change, so it is reported as an architectural finding instead — naming
+// every pinned PV and its domain so an operator can act on it — and never
+// claims ImprovesSurvivability, for the same reason rungs 5 and 6 do not.
+func rung8VolumePin(in Input) (Fix, bool) {
+	if len(in.Verdict.VolumePins) == 0 {
+		return Fix{}, false
+	}
+
+	parts := make([]string, 0, len(in.Verdict.VolumePins))
+	for _, p := range in.Verdict.VolumePins {
+		parts = append(parts, fmt.Sprintf("PVC %s is bound to PV %s, pinned to domain %s", p.PVC, p.PV, p.Domain))
+	}
+
+	return Fix{
+		Rung:                  RungVolumePin,
+		Title:                 "Zonal volume pins this workload to its domain",
+		ImprovesSurvivability: false,
+		Architectural: fmt.Sprintf(
+			"%s. Moving a zonal volume is a data migration; no scheduling patch can relocate it.",
+			strings.Join(parts, "; ")),
 	}, true
 }

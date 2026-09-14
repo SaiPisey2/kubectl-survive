@@ -59,16 +59,40 @@ func verdictWithSpread(state spread.State) survive.Verdict {
 
 // inputFor is the common case: a template, a spread state, and a replica
 // count, spread across three zones with the workload's own labels as the
-// selector. Tests that need something more specific build an Input literal.
+// selector. The verdict's AntiAffinity assessment is derived from the
+// template itself, the same way the real analysis pipeline computes it, so
+// a template built with templateWithPreferredZoneAntiAffinity correctly
+// produces an advisory assessment without every caller having to set it by
+// hand. Tests that need something more specific build an Input literal.
 func inputFor(tmpl *corev1.PodTemplateSpec, state spread.State, replicas int) Input {
+	v := verdictWithSpread(state)
+	v.AntiAffinity = spread.ClassifyAntiAffinity(tmpl.Spec.Affinity, zoneKey)
 	return Input{
-		Verdict:   verdictWithSpread(state),
+		Verdict:   v,
 		Template:  tmpl,
 		Replicas:  replicas,
 		DomainKey: zoneKey,
 		Domains:   []string{"zone-a", "zone-b", "zone-c"},
 		Selector:  map[string]string{"app": "web"},
 	}
+}
+
+// templateWithPreferredZoneAntiAffinity builds a template carrying a single
+// preferred (advisory) pod anti-affinity term on zoneKey, for rung 7 tests.
+func templateWithPreferredZoneAntiAffinity() *corev1.PodTemplateSpec {
+	t := templateWithLabels(map[string]string{"app": "web"})
+	t.Spec.Affinity = &corev1.Affinity{
+		PodAntiAffinity: &corev1.PodAntiAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{
+				Weight: 100,
+				PodAffinityTerm: corev1.PodAffinityTerm{
+					TopologyKey:   zoneKey,
+					LabelSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
+				},
+			}},
+		},
+	}
+	return t
 }
 
 // pdbMinAvailable builds a PodDisruptionBudget carrying only a minAvailable

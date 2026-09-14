@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/SaiPisey2/kubectl-survive/internal/spread"
+	"github.com/SaiPisey2/kubectl-survive/internal/volumepin"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
 )
@@ -154,6 +155,7 @@ func TestPatchesNeverContainGoMapFormatting(t *testing.T) {
 			in.PDB = pdbMinAvailable(1)
 			return in
 		}(),
+		inputFor(templateWithPreferredZoneAntiAffinity(), spread.StateAbsent, 3),
 	}
 	for _, in := range inputs {
 		for _, f := range Candidates(in) {
@@ -267,6 +269,75 @@ func TestRung5DoesNotFireForAWorkloadWithNoIdentifyingLabels(t *testing.T) {
 	}
 }
 
+func TestRung7PromotesPreferredAntiAffinityToRequired(t *testing.T) {
+	tmpl := templateWithPreferredZoneAntiAffinity()
+	f := mustFindRung(t, Candidates(inputFor(tmpl, spread.StateAbsent, 3)), RungAntiAffinity)
+
+	applied := f.Apply(tmpl)
+	req := applied.Spec.Affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	pref := applied.Spec.Affinity.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution
+	if len(req) != 1 {
+		t.Fatalf("the preferred term must become a required one, got %d", len(req))
+	}
+	if len(pref) != 0 {
+		t.Fatal("the preferred term must be removed, not duplicated: keeping both double-counts the constraint")
+	}
+	if req[0].TopologyKey != zoneKey {
+		t.Fatalf("topology key changed: %q", req[0].TopologyKey)
+	}
+	if !f.ImprovesSurvivability {
+		t.Fatal("a required anti-affinity term is a real scheduling guarantee: this is a survivability fix")
+	}
+}
+
+func TestRung8IsReportedAndNeverPatched(t *testing.T) {
+	in := inputFor(templateWithLabels(nil), spread.StateEnforced, 3)
+	in.Verdict.VolumePins = []volumepin.Pin{{PVC: "data-0", PV: "pvc-8f21ac", Domain: "zone-a"}}
+	f := mustFindRung(t, Candidates(in), RungVolumePin)
+
+	if f.Fixable() {
+		t.Fatal("moving a zonal disk is a data migration, not a patch")
+	}
+	if f.Patch != "" || f.Mutate != nil {
+		t.Fatal("rung 8 must carry no patch and no mutation")
+	}
+	if f.ImprovesSurvivability {
+		t.Fatal("rung 8 is a reported finding, not a fix; it must not claim to improve survivability")
+	}
+	for _, want := range []string{"pvc-8f21ac", "zone-a"} {
+		if !strings.Contains(f.Architectural, want) {
+			t.Errorf("the finding must name %q so an operator can act on it: %q", want, f.Architectural)
+		}
+	}
+}
+
+func TestRung8SuppressesPatchRungsThatCannotHelp(t *testing.T) {
+	// A pod pinned to a zone by its volume cannot be spread out of that zone.
+	// Offering a spread constraint would be a fix that provably cannot work,
+	// and the scheduler proof would reject it anyway - but offering it at all
+	// wastes the operator's attention.
+	in := inputFor(templateWithLabels(nil), spread.StateAbsent, 1)
+	in.Verdict.VolumePins = []volumepin.Pin{{PVC: "data-0", PV: "pv-1", Domain: "zone-a"}}
+	got := Candidates(in)
+	if findRung(got, RungSpreadAdd) != nil {
+		t.Fatal("a zone-pinned pod cannot be spread")
+	}
+}
+
+func TestRung8SuppressesAntiAffinityRungThatCannotHelp(t *testing.T) {
+	// A zone-pinned pod cannot be moved by an anti-affinity rule either.
+	tmpl := templateWithPreferredZoneAntiAffinity()
+	in := inputFor(tmpl, spread.StateAbsent, 3)
+	in.Verdict.VolumePins = []volumepin.Pin{{PVC: "data-0", PV: "pv-1", Domain: "zone-a"}}
+	got := Candidates(in)
+	if findRung(got, RungAntiAffinity) != nil {
+		t.Fatal("a zone-pinned pod cannot be helped by anti-affinity either")
+	}
+	if findRung(got, RungVolumePin) == nil {
+		t.Fatal("the volume pin finding must still be reported")
+	}
+}
+
 func TestGeneratedPatchesAreWellFormedYAML(t *testing.T) {
 	inputs := []Input{
 		inputFor(templateWithLabels(map[string]string{"app": "web", "env": "prod"}), spread.StateAbsent, 3),
@@ -281,6 +352,7 @@ func TestGeneratedPatchesAreWellFormedYAML(t *testing.T) {
 			in.PDB = pdbMinAvailable(1)
 			return in
 		}(),
+		inputFor(templateWithPreferredZoneAntiAffinity(), spread.StateAbsent, 3),
 	}
 	for _, in := range inputs {
 		for _, f := range Candidates(in) {
