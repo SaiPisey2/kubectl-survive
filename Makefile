@@ -29,6 +29,12 @@ verify-deps:
 
 verify-replaces:
 	@hack/verify-replaces.sh
+
+# Authorship is a hard requirement and tooling defaults try to add trailers,
+# so this is a control rather than a matter of care. BASE defaults to
+# origin/main; override for a branch built from something else.
+verify-attribution:
+	@hack/verify-attribution.sh $(BASE)
 release-check:
 	goreleaser check
 # Full cross-platform build with no publishing, including the krew manifest.
