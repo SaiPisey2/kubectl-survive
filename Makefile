@@ -12,9 +12,14 @@ test:
 # The analysis core must stay free of the scheduler tree: spec §7.2 promises
 # survivability verdicts keep working when the scheduler checks are disabled on
 # a version mismatch, and that promise is only real if the code cannot import it.
+#
+# internal/fix is in the list for a second reason: generating a remediation
+# candidate is pure, and keeping it that way is what lets the whole ladder be
+# tested without a cluster. Proving a candidate needs the scheduler, so that
+# lives in internal/verify instead.
 CORE := ./internal/domain/... ./internal/health/... ./internal/snapshot/... \
         ./internal/workload/... ./internal/pdbcheck/... ./internal/spread/... \
-        ./internal/volumepin/... ./internal/survive/...
+        ./internal/volumepin/... ./internal/survive/... ./internal/fix/...
 
 verify-deps:
 	@if go list -deps $(CORE) | grep -q '^k8s.io/kubernetes'; then \
