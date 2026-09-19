@@ -23,6 +23,11 @@ jobs:
 
   differential:
     runs-on: ubuntu-latest
+    # The nightly sweep genuinely needs this long: a GitHub runner costs about
+    # 25s per scenario, roughly four times the figure measured on Apple
+    # Silicon, so 200 scenarios is ~85 minutes before the fix-verification
+    # test is counted. The job default of 360 minutes is the real ceiling.
+    timeout-minutes: 180
     needs: unit
     steps:
       - uses: actions/checkout@v7
@@ -45,4 +50,4 @@ jobs:
           # Per-PR budget. The nightly schedule raises it. Validate the real
           # per-scenario cost with a timed pilot before trusting a larger number.
           SURVIVE_SCENARIOS: ${{ github.event_name == 'schedule' && '200' || '20' }}
-        run: go test -tags harness ./test/harness/ -v -timeout 60m
+        run: go test -tags harness ./test/harness/ -v -timeout 170m
