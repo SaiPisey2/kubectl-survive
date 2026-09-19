@@ -58,6 +58,30 @@ kubectl survive --domain-key rack    # any node label
 kubectl survive -o json              # machine readable
 ```
 
+For every workload reported lost or degraded, `kubectl survive fix` proposes a
+ranked ladder of remediations and proves each one against your actual cluster
+before printing it:
+
+```sh
+kubectl survive fix                        # print verified fixes for every failing workload
+kubectl survive fix checkout-api           # only this workload
+kubectl survive fix --out-dir ./patches    # write one patch file per fix instead
+```
+
+Every fix printed has cleared two proofs, not one:
+
+- **Schedulable** — the real scheduler's Filter plugins, not Score, accept the
+  mutated pod on the cluster's actual nodes. A placement that only looks good
+  because scoring happened to favour an empty zone is not good enough; Filter
+  is what the scheduler must honour.
+- **Survives** — survivability analysis, re-run against that placement, no
+  longer reports the workload lost.
+
+A fix that clears schedulability but not survivability is still shown,
+labelled `ALT` rather than `FIX`, because it helps without solving the
+problem. `kubectl survive fix` is read-only: it prints patches, or writes them
+to `--out-dir`, and never touches the cluster itself.
+
 ## What it checks
 
 - **Real placement**, not declared intent. Constraints bind at scheduling time
@@ -92,9 +116,11 @@ go test -tags harness ./test/harness/    # requires Docker and kwokctl
 - Dependencies between workloads are not yet modelled. A service spread across
   three zones is still reported as surviving even if the database it calls has
   its only replica in the zone that vanished.
-- A satisfiable budget combined with an enforced spread can still deadlock a
-  drain when the replacement pod cannot be scheduled anywhere. Detecting that
-  requires scheduling analysis and is not implemented.
+- The ladder emits independent, individually actionable rungs (spec §6.1), so
+  a workload whose only real remedy is a combination — for example a single
+  replica in a single zone, which needs both more replicas and an enforced
+  spread — will see each rung reported as partial rather than one combined
+  fix.
 - Cluster-external dependencies are invisible.
 
 ## Requires
