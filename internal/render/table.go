@@ -16,6 +16,15 @@ func Table(w io.Writer, r *survive.Report) error {
 
 	for _, d := range r.Domains {
 		fmt.Fprintf(w, "Losing %s  ->  %d lost, %d degraded\n", d.Domain, d.Lost, d.Degraded)
+
+		// A domain with nothing wrong gets its summary line and nothing else.
+		// A header with no rows under it reads as a truncated table rather than
+		// as good news.
+		if !anyAffected(d) {
+			fmt.Fprintln(w)
+			continue
+		}
+
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(tw, "  WORKLOAD\tPLACEMENT\tVERDICT")
 		for _, v := range d.Verdicts {
@@ -74,4 +83,15 @@ func placement(p map[string]int) string {
 		s += fmt.Sprintf("%s:%d", name, p[k])
 	}
 	return s
+}
+
+// anyAffected reports whether a domain has any verdict worth printing a table
+// for.
+func anyAffected(d survive.DomainResult) bool {
+	for _, v := range d.Verdicts {
+		if v.Outcome != survive.OutcomeSurvives {
+			return true
+		}
+	}
+	return false
 }

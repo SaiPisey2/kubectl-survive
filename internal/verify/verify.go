@@ -172,10 +172,13 @@ func stillServes(report *survive.Report, ref workload.Ref) (bool, string) {
 				continue
 			}
 			switch verdict.Outcome {
+			// The cause is already printed on the workload's own header line
+			// directly above these proofs, so repeating it here only makes the
+			// line wrap. Name the domain and stop.
 			case survive.OutcomeLost:
-				return false, fmt.Sprintf("still lost losing %s: %s", dr.Domain, verdict.Reason)
+				return false, fmt.Sprintf("still lost losing %s", dr.Domain)
 			case survive.OutcomeUnknown:
-				return false, fmt.Sprintf("unknown outcome losing %s: %s", dr.Domain, verdict.Reason)
+				return false, fmt.Sprintf("outcome unknown losing %s", dr.Domain)
 			}
 		}
 	}

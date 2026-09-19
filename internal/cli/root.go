@@ -41,6 +41,10 @@ func NewCmd(streams genericiooptions.IOStreams) *cobra.Command {
 		"node label defining the failure domain")
 	cmd.Flags().StringVarP(&o.Output, "output", "o", "table", "output format: table|json")
 
+	// A failure to reach the cluster is not a usage error. Printing the whole
+	// flag list after one is noise that buries the actual message.
+	cmd.SilenceUsage = true
+
 	// Plain identity line rather than cobra's "survive version <x>" default.
 	cmd.SetVersionTemplate("{{.Version}}\n")
 	cmd.AddCommand(newVersionCmd(streams))

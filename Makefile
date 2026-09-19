@@ -35,6 +35,14 @@ verify-replaces:
 # origin/main; override for a branch built from something else.
 verify-attribution:
 	@hack/verify-attribution.sh $(BASE)
+
+# go vet does not check formatting, so unformatted code reached a commit before
+# this existed.
+verify-fmt:
+	@unformatted=$$(gofmt -l ./cmd ./internal ./test); \
+	if [ -n "$$unformatted" ]; then \
+		echo "ERROR: these files are not gofmt-clean:"; echo "$$unformatted"; exit 1; fi
+	@echo "gofmt: ok"
 release-check:
 	goreleaser check
 # Full cross-platform build with no publishing, including the krew manifest.

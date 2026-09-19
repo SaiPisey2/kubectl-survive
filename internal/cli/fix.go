@@ -113,6 +113,21 @@ func (o *FixOptions) runWithSnapshot(ctx context.Context, snap *snapshot.Snapsho
 		return err
 	}
 
+	// Silence is ambiguous when the operator named a workload: it reads the
+	// same whether the workload is healthy or the name was a typo, and a typo
+	// silently reported as "nothing to fix" is the worst of the two.
+	if len(results) == 0 && len(o.Only) > 0 {
+		known := knownWorkloads(report)
+		for _, name := range o.Only {
+			if known[name] {
+				fmt.Fprintf(o.Streams.Out, "%s survives losing any %s.\n", name, o.DomainKey)
+				continue
+			}
+			fmt.Fprintf(o.Streams.ErrOut, "No workload named %q was found.\n", name)
+		}
+		return nil
+	}
+
 	if o.OutDir != "" {
 		return writeFixPatches(o.OutDir, results)
 	}
@@ -214,4 +229,16 @@ func withinDir(absDir, absPath string) bool {
 		return false
 	}
 	return true
+}
+
+// knownWorkloads is every workload the analysis saw, healthy or not, so a name
+// that simply does not exist can be told apart from one that is fine.
+func knownWorkloads(report *survive.Report) map[string]bool {
+	out := map[string]bool{}
+	for _, d := range report.Domains {
+		for _, v := range d.Verdicts {
+			out[v.Workload.Name] = true
+		}
+	}
+	return out
 }
