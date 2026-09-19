@@ -31,6 +31,17 @@ func sampleReport() *survive.Report {
 				Reason:    "all 3 available replicas are in us-east-1a",
 				Placement: map[string]int{"us-east-1a": 3},
 			}},
+		}, {
+			// A domain where nothing is wrong. The renderer must print its
+			// summary line and nothing else: a table header with no rows under
+			// it reads as a truncated table rather than as good news. This case
+			// had no golden coverage, which is why it regressed unnoticed.
+			Domain: "us-east-1b",
+			Verdicts: []survive.Verdict{{
+				Workload:  workload.Ref{Kind: "Deployment", Namespace: "default", Name: "checkout-api"},
+				Outcome:   survive.OutcomeSurvives,
+				Placement: map[string]int{"us-east-1a": 3},
+			}},
 		}},
 	}
 }

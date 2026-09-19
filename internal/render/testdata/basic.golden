@@ -4,3 +4,5 @@ Losing us-east-1a  ->  1 lost, 0 degraded
   WORKLOAD      PLACEMENT     VERDICT
   checkout-api  us-east-1a:3  LOST all 3 available replicas are in us-east-1a
 
+Losing us-east-1b  ->  0 lost, 0 degraded
+
