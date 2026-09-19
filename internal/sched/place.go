@@ -95,6 +95,70 @@ func (s *Scheduler) Place(ctx context.Context, pod *corev1.Pod, replicas int, do
 	return out, nil
 }
 
+// PlaceReplacing simulates the steady state after a rollout: replacing's
+// pods are withdrawn from the cluster view before the replicas are placed,
+// and restored again before returning.
+//
+// A fix to an existing workload replaces its pods; it does not add a second
+// copy of them alongside the ones already there. Place alone models "add N
+// more pods to the cluster as it stands", which is correct for a workload
+// that does not exist yet but double-counts an existing one against itself:
+// its old pods still occupy capacity and still count toward topology spread
+// while the new ones are being fit in. On a cluster with slack that merely
+// produces a placement that will not be the real one; on a tight cluster it
+// wrongly refuses a fix that would in fact fit once the rollout completes.
+//
+// replacing is exactly the set of pods the caller believes this workload's
+// rollout will remove; only the ones actually occupying a node are
+// withdrawn, mirroring how the cache was seeded from assigned pods only.
+func (s *Scheduler) PlaceReplacing(ctx context.Context, pod *corev1.Pod, replicas int, domainKey string, replacing []*corev1.Pod) (_ Placement, err error) {
+	withdrawn, werr := s.withdrawExisting(replacing)
+	if werr != nil {
+		return Placement{}, fmt.Errorf("withdrawing the pods being replaced: %w", werr)
+	}
+	defer func() {
+		if rerr := s.reinstate(withdrawn); rerr != nil && err == nil {
+			// Leaving the workload's real pods out of the cache would corrupt
+			// every later answer just as surely as leaving a simulated one in.
+			err = fmt.Errorf("restoring the replaced pods: %w", rerr)
+		}
+	}()
+	return s.Place(ctx, pod, replicas, domainKey)
+}
+
+// withdrawExisting removes pods' assigned members from the cache ahead of a
+// PlaceReplacing simulation, returning exactly the pods it removed so they
+// can be put back.
+func (s *Scheduler) withdrawExisting(pods []*corev1.Pod) ([]*corev1.Pod, error) {
+	assigned := assignedPods(pods)
+	if len(assigned) == 0 {
+		return nil, nil
+	}
+	for _, p := range assigned {
+		if err := s.cache.RemovePod(s.logger, p); err != nil {
+			return nil, fmt.Errorf("remove existing pod %s/%s: %w", p.Namespace, p.Name, err)
+		}
+	}
+	if err := s.cache.UpdateSnapshot(s.logger, s.snapshot); err != nil {
+		return nil, fmt.Errorf("refresh snapshot: %w", err)
+	}
+	return assigned, nil
+}
+
+// reinstate is withdrawExisting's inverse, adding pods back to the cache and
+// refreshing the snapshot so the plugins see them again.
+func (s *Scheduler) reinstate(pods []*corev1.Pod) error {
+	if len(pods) == 0 {
+		return nil
+	}
+	for _, p := range pods {
+		if err := s.cache.AddPod(s.logger, p); err != nil {
+			return fmt.Errorf("re-add existing pod %s/%s: %w", p.Namespace, p.Name, err)
+		}
+	}
+	return s.cache.UpdateSnapshot(s.logger, s.snapshot)
+}
+
 // withdraw removes the simulated pods and refreshes the snapshot, in reverse
 // order of placement.
 func (s *Scheduler) withdraw(pods []*corev1.Pod) error {

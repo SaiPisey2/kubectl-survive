@@ -81,7 +81,14 @@ func (v *Verifier) Verify(ctx context.Context, in fix.Input, f fix.Fix) Proof {
 	}
 	pod := podFromTemplate(tmpl, in.Verdict.Workload.Namespace, in.Verdict.Workload.Name)
 
-	placement, err := v.sched.Place(ctx, pod, replicas, v.domainKey)
+	// A fix to this workload replaces its existing pods; it does not add a
+	// second copy of them. PlaceReplacing withdraws exactly those pods before
+	// simulating, using the same belongsTo test hypotheticalSnapshot uses
+	// below, so the two cannot disagree about which pods this workload owns.
+	idx := workload.NewIndex(v.snap)
+	existing := ownedPods(v.snap.Pods, idx, in.Verdict.Workload)
+
+	placement, err := v.sched.PlaceReplacing(ctx, pod, replicas, v.domainKey, existing)
 	if err != nil {
 		// Unknown is never reported as safe.
 		p.Err = fmt.Errorf("schedulability: %w", err)
@@ -226,6 +233,18 @@ func (v *Verifier) hypotheticalSnapshot(in fix.Input, f fix.Fix, tmpl *corev1.Po
 	out.Pods = pods
 	out.PDBs = pdbs
 	return &out, nil
+}
+
+// ownedPods returns the subset of pods that belongsTo ref, in the same
+// membership every proof in this package uses.
+func ownedPods(pods []*corev1.Pod, idx *workload.Index, ref workload.Ref) []*corev1.Pod {
+	var out []*corev1.Pod
+	for _, p := range pods {
+		if belongsTo(p, idx, ref) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // belongsTo reports whether pod is a member of ref's workload, using the same

@@ -141,6 +141,99 @@ func TestWithdrawSurfacesCacheErrors(t *testing.T) {
 	}
 }
 
+// TestPlaceReplacingWithdrawsTheReplacedPodsForTheSimulation is
+// PlaceReplacing's whole reason to exist: with the workload's 3 existing
+// pods still occupying zone-a's only node, an enforced maxSkew=1 fit only 2
+// more replicas onto zone-b and zone-c (Place's ordinary "add N more"
+// answer). Withdrawing the pods being replaced first must let all 3 land,
+// one per zone.
+func TestPlaceReplacingWithdrawsTheReplacedPodsForTheSimulation(t *testing.T) {
+	s := mustNew(t, snapshotWith(
+		[]*corev1.Node{node("n-a", "zone-a"), node("n-b", "zone-b"), node("n-c", "zone-c")}, nil))
+
+	existing := []*corev1.Pod{
+		assignedPod("web-0", "n-a", map[string]string{"app": "web"}),
+		assignedPod("web-1", "n-a", map[string]string{"app": "web"}),
+		assignedPod("web-2", "n-a", map[string]string{"app": "web"}),
+	}
+	for _, p := range existing {
+		if err := s.cache.AddPod(s.logger, p); err != nil {
+			t.Fatalf("seed existing pod %s: %v", p.Name, err)
+		}
+	}
+	if err := s.cache.UpdateSnapshot(s.logger, s.snapshot); err != nil {
+		t.Fatalf("seed snapshot: %v", err)
+	}
+
+	tmpl := withEnforcedZoneSpread(unassignedPod("web", map[string]string{"app": "web"}))
+
+	p, err := s.PlaceReplacing(context.Background(), tmpl, 3, zoneKey, existing)
+	if err != nil {
+		t.Fatalf("PlaceReplacing: %v", err)
+	}
+	if p.Unschedulable != 0 {
+		t.Fatalf("the rollout leaves exactly one node per zone free; want all 3 placed, got %+v", p)
+	}
+	for _, z := range []string{"zone-a", "zone-b", "zone-c"} {
+		if p.Domains[z] != 1 {
+			t.Errorf("zone %s holds %d replicas, want 1 (%+v)", z, p.Domains[z], p.Domains)
+		}
+	}
+}
+
+// TestPlaceReplacingRestoresBothTheReplacedAndSimulatedPods checks the two
+// nested withdrawals compose: after PlaceReplacing returns, the cache must
+// report exactly the cluster it started with -- the existing pods back in
+// place and no trace of the simulated ones -- so a second call, or a plain
+// Place call, is not answering against leftovers.
+func TestPlaceReplacingRestoresBothTheReplacedAndSimulatedPods(t *testing.T) {
+	s := mustNew(t, snapshotWith(
+		[]*corev1.Node{node("n-a", "zone-a"), node("n-b", "zone-b"), node("n-c", "zone-c")}, nil))
+
+	existing := []*corev1.Pod{
+		assignedPod("web-0", "n-a", map[string]string{"app": "web"}),
+		assignedPod("web-1", "n-a", map[string]string{"app": "web"}),
+		assignedPod("web-2", "n-a", map[string]string{"app": "web"}),
+	}
+	for _, p := range existing {
+		if err := s.cache.AddPod(s.logger, p); err != nil {
+			t.Fatalf("seed existing pod %s: %v", p.Name, err)
+		}
+	}
+	if err := s.cache.UpdateSnapshot(s.logger, s.snapshot); err != nil {
+		t.Fatalf("seed snapshot: %v", err)
+	}
+
+	before, err := s.Fits(context.Background(), unassignedPod("probe", nil), zoneKey)
+	if err != nil {
+		t.Fatalf("Fits before: %v", err)
+	}
+
+	tmpl := withEnforcedZoneSpread(unassignedPod("web", map[string]string{"app": "web"}))
+	first, err := s.PlaceReplacing(context.Background(), tmpl, 3, zoneKey, existing)
+	if err != nil {
+		t.Fatalf("first PlaceReplacing: %v", err)
+	}
+
+	after, err := s.Fits(context.Background(), unassignedPod("probe", nil), zoneKey)
+	if err != nil {
+		t.Fatalf("Fits after: %v", err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("cluster view was not fully restored: before=%+v after=%+v", before, after)
+	}
+
+	// A second call on the same Scheduler must see the same real cluster and
+	// therefore agree with the first.
+	second, err := s.PlaceReplacing(context.Background(), tmpl, 3, zoneKey, existing)
+	if err != nil {
+		t.Fatalf("second PlaceReplacing: %v", err)
+	}
+	if !reflect.DeepEqual(first.Domains, second.Domains) {
+		t.Fatalf("second call saw a different cluster: first=%+v second=%+v", first.Domains, second.Domains)
+	}
+}
+
 // withEnforcedZoneSpread attaches an enforced maxSkew=1 zone spread
 // constraint matching the pod's own labels, used to prove that feedback
 // between replica placements is real.
