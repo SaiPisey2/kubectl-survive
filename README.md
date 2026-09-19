@@ -11,6 +11,12 @@ the same place. Nothing alerts, and git never changed.
 `kubectl survive` reads the real pod placement, removes a failure domain, and
 tells you what actually stops serving.
 
+![kubectl survive finding two single-zone workloads on a cluster that reports every deployment healthy, then proving a fix](demo/survive.gif)
+
+Every frame above is real output from a real `kube-apiserver` and
+`kube-scheduler`. The cluster reports `3/3` ready for everything; two workloads
+would still go dark with one zone. See [demo/](demo/) to reproduce it.
+
 ## Install
 
 Download a binary for your platform from the

@@ -1,0 +1,68 @@
+# Demo fixtures. Every workload here is real and is scheduled by a real
+# kube-scheduler under KWOK; nothing in the recording is mocked.
+#
+# checkout-api   3 replicas, no spread constraint at all -> the scheduler is
+#                free to pile them into one zone, and does.
+# session-store  1 replica plus a PDB of minAvailable:1, which can never be
+#                satisfied: no pod is ever evictable, so any drain hangs.
+# web            3 replicas with an enforced maxSkew=1 -> correctly spread,
+#                and therefore absent from the report. The tool only prints
+#                what is broken.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-api
+  namespace: default
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: checkout-api}
+  template:
+    metadata:
+      labels: {app: checkout-api}
+    spec:
+      tolerations:
+        - key: kwok.x-k8s.io/node
+          operator: Exists
+          effect: NoSchedule
+      nodeSelector: {type: kwok}
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.9
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: session-store
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: session-store}
+  template:
+    metadata:
+      labels: {app: session-store}
+    spec:
+      tolerations:
+        - key: kwok.x-k8s.io/node
+          operator: Exists
+          effect: NoSchedule
+      nodeSelector: {type: kwok}
+      containers:
+        - name: app
+          image: registry.k8s.io/pause:3.9
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: session-store
+  namespace: default
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: session-store}
