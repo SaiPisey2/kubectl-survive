@@ -44,6 +44,7 @@ func NewCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	// Plain identity line rather than cobra's "survive version <x>" default.
 	cmd.SetVersionTemplate("{{.Version}}\n")
 	cmd.AddCommand(newVersionCmd(streams))
+	cmd.AddCommand(newFixCmd(streams))
 	return cmd
 }
 
