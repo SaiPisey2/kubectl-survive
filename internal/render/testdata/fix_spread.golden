@@ -1,0 +1,16 @@
+checkout-api   ✗ dies with us-east-1a   (3/3 replicas in 1a, no spread constraint)
+
+  FIX  add topologySpreadConstraint  maxSkew=1  zone  DoNotSchedule
+       ├─ schedulable?  yes — 1a:1  1b:1  1c:1   (12 nodes have room)
+       └─ survives us-east-1a?  yes — 2 of 3 replicas remain
+
+  spec:
+    template:
+      spec:
+  +     topologySpreadConstraints:
+  +     - maxSkew: 1
+  +       topologyKey: topology.kubernetes.io/zone
+  +       whenUnsatisfiable: DoNotSchedule
+  +       labelSelector:
+  +         matchLabels: {app: checkout-api}
+

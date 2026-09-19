@@ -1,0 +1,8 @@
+ledger-db   ✗ dies with us-east-1a
+
+  Cause: PersistentVolume pvc-8f21ac is zonal (nodeAffinity -> us-east-1a). The pod cannot run anywhere else. No manifest change moves it.
+
+  This is an architecture change, not a patch:
+  replicate at the data layer, move to regional storage, or accept the risk
+  and document it.
+
