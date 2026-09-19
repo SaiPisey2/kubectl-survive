@@ -51,7 +51,11 @@ func Analyze(ctx context.Context, s *snapshot.Snapshot, report *survive.Report, 
 	}
 	v := NewVerifier(sc, s, domainKey)
 
-	_, domains := domain.Group(s.Nodes, domainKey)
+	groups, _ := domain.Group(s.Nodes, domainKey)
+	domains := make([]string, 0, len(groups))
+	for d := range groups {
+		domains = append(domains, d)
+	}
 	sort.Strings(domains)
 
 	wanted := workloadFilter(only)

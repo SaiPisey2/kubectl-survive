@@ -335,3 +335,52 @@ func ownedStatefulPod(name, node string, labels map[string]string) *corev1.Pod {
 }
 
 func int32Ptr(n int32) *int32 { return &n }
+
+// TestAnalyzeOffersReplicasRaiseOnAHealthyMultiZoneCluster is a wiring test:
+// domain.Group returns (groups, unlabelled), and Analyze must feed the real
+// domains -- not the unlabelled-node list, which is empty on any healthy
+// cluster -- into fix.Input.Domains. Without that, len(in.Domains) is always
+// 0 and rung 4 (raise replicas to the domain count) can never fire, which no
+// hand-built fix.Input fixture would ever catch since every other test in
+// this package sets Domains directly.
+//
+// session-store: 1 replica, 3 zones, an unsatisfiable minAvailable:1 budget.
+// Spec 6.2's own worked example for this exact shape lists "replicas 1 -> 3"
+// as the primary fix, so rung 4 must be offered here.
+func TestAnalyzeOffersReplicasRaiseOnAHealthyMultiZoneCluster(t *testing.T) {
+	ref := workload.Ref{Kind: "Deployment", Namespace: "default", Name: "workload"}
+	tmpl := singletonTemplate()
+
+	snap := snapshotWith(threeZonesOneNodeEach(), oneReplicaIn("zone-a"))
+	snap.Deployments = []*appsv1.Deployment{deployment("workload", 1, tmpl)}
+	pdb := pdbMinAvailable(1)
+	pdb.Name = "singleton-pdb"
+	pdb.Namespace = "default"
+	pdb.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"app": "singleton"}}
+	snap.PDBs = []*policyv1.PodDisruptionBudget{pdb}
+
+	report := &survive.Report{
+		DomainKey: zoneKey,
+		Domains: []survive.DomainResult{{
+			Domain:   "zone-a",
+			Lost:     1,
+			Verdicts: []survive.Verdict{lostVerdict(ref, tmpl)},
+		}},
+	}
+
+	results, err := Analyze(context.Background(), snap, report, zoneKey, nil)
+	if err != nil {
+		t.Fatalf("Analyze: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("want 1 result, got %d", len(results))
+	}
+	for _, v := range results[0].Fixes {
+		if v.Fix.Rung == fix.RungReplicasRaise {
+			t.Logf("rung 4 proof: schedulable=%v survives=%v partial=%v detail=%q/%q",
+				v.Proof.Schedulable, v.Proof.Survives, v.Partial, v.Proof.SchedulableDetail, v.Proof.SurvivesDetail)
+			return
+		}
+	}
+	t.Fatalf("want rung 4 (raise replicas to the domain count) offered on a 3-zone cluster, got %+v", results[0].Fixes)
+}
