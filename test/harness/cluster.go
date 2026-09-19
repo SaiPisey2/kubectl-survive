@@ -148,3 +148,32 @@ spec:
         resources: {requests: {cpu: 100m, memory: 128Mi}}
 `, name, replicas, name, name)
 }
+
+// WaitNodeSchedulable blocks until name carries no NoSchedule taint. KWOK
+// briefly applies the standard node-lifecycle-controller's
+// node.kubernetes.io/not-ready:NoSchedule taint to a freshly created node
+// while it catches up to the Ready status the caller already set, even though
+// no real kubelet heartbeat will ever follow; a pod placed against the node
+// during that window is correctly refused, so callers that need the node
+// usable right away must wait it out here rather than racing it.
+func (c *Cluster) WaitNodeSchedulable(t *testing.T, name string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		node, err := c.Client.CoreV1().Nodes().Get(context.Background(), name, metav1.GetOptions{})
+		if err == nil {
+			blocked := false
+			for _, taint := range node.Spec.Taints {
+				if taint.Effect == corev1.TaintEffectNoSchedule || taint.Effect == corev1.TaintEffectNoExecute {
+					blocked = true
+					break
+				}
+			}
+			if !blocked {
+				return
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for node %s to shed its startup taint", name)
+}
