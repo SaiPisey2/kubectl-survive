@@ -27,7 +27,7 @@ func NewCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	}
 
 	cmd := &cobra.Command{
-		Use:     "survive",
+		Use:     "survive-zone",
 		Short:   "Report which workloads lose availability if a failure domain is lost",
 		Version: version.Get().String(),
 		RunE: func(cmd *cobra.Command, args []string) error {

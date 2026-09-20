@@ -13,8 +13,8 @@ func TestNewCmdHasExpectedFlags(t *testing.T) {
 	streams := genericiooptions.IOStreams{In: &bytes.Buffer{}, Out: &bytes.Buffer{}, ErrOut: &bytes.Buffer{}}
 	cmd := NewCmd(streams)
 
-	if cmd.Use != "survive" {
-		t.Errorf("Use = %q, want %q", cmd.Use, "survive")
+	if cmd.Use != "survive-zone" {
+		t.Errorf("Use = %q, want %q", cmd.Use, "survive-zone")
 	}
 	for _, f := range []string{"kubeconfig", "context", "namespace", "domain-key", "output"} {
 		if cmd.Flags().Lookup(f) == nil {
@@ -31,7 +31,7 @@ func TestVersionSubcommandPrintsIdentity(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("version: %v", err)
 	}
-	if !strings.HasPrefix(out.String(), "kubectl-survive ") {
+	if !strings.HasPrefix(out.String(), "kubectl-survive_zone ") {
 		t.Fatalf("unexpected output %q", out.String())
 	}
 }

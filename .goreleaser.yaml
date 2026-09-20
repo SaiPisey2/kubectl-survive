@@ -9,8 +9,8 @@ before:
 
 builds:
   - id: kubectl-survive
-    main: ./cmd/kubectl-survive
-    binary: kubectl-survive
+    main: ./cmd/kubectl-survive_zone
+    binary: kubectl-survive_zone
     env:
       - CGO_ENABLED=0
     flags:
@@ -59,10 +59,13 @@ release:
   prerelease: auto
 
 krews:
-  - name: survive
+  - name: survive-zone
     ids: [default]
     homepage: https://github.com/SaiPisey2/kubectl-survive
-    short_description: Report which workloads lose availability if a zone is lost
+    # krew renders this in `kubectl krew search` and `list`, where the column
+    # is narrow, so the index caps it at 50 characters. It is a tagline, not a
+    # sentence.
+    short_description: Show which workloads die when a zone is lost
     description: |
       Reads real pod placement rather than declared intent, removes a failure
       domain, and reports which workloads stop serving. Also detects

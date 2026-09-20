@@ -1,4 +1,4 @@
-# kubectl survive
+# kubectl survive-zone
 
 Find out whether your cluster actually survives losing a zone.
 
@@ -8,10 +8,10 @@ replicas permits all three in one zone. `whenUnsatisfiable: ScheduleAnyway`
 quietly gives up under pressure. A node drains at 2am and every replica lands in
 the same place. Nothing alerts, and git never changed.
 
-`kubectl survive` reads the real pod placement, removes a failure domain, and
+`kubectl survive-zone` reads the real pod placement, removes a failure domain, and
 tells you what actually stops serving.
 
-![kubectl survive finding two single-zone workloads on a cluster that reports every deployment healthy, then proving a fix](demo/survive.gif)
+![kubectl survive-zone finding two single-zone workloads on a cluster that reports every deployment healthy, then proving a fix](demo/survive.gif)
 
 Every frame above is real output from a real `kube-apiserver` and
 `kube-scheduler`. The cluster reports `3/3` ready for everything; two workloads
@@ -23,7 +23,7 @@ Download a binary for your platform from the
 [releases page](https://github.com/SaiPisey2/kubectl-survive/releases), or:
 
 ```sh
-go install github.com/SaiPisey2/kubectl-survive/cmd/kubectl-survive@latest
+go install github.com/SaiPisey2/kubectl-survive/cmd/kubectl-survive_zone@latest
 ```
 
 Or build from source:
@@ -33,13 +33,14 @@ git clone https://github.com/SaiPisey2/kubectl-survive
 cd kubectl-survive && make build
 ```
 
-Put `kubectl-survive` on your `PATH` and kubectl picks it up as `kubectl survive`.
-Check what you have with `kubectl survive version`.
+Put `kubectl-survive_zone` on your `PATH` and kubectl picks it up as
+`kubectl survive-zone`. The underscore is how kubectl resolves a hyphenated
+plugin command. Check what you have with `kubectl survive-zone version`.
 
 ## Use
 
 ```
-$ kubectl survive
+$ kubectl survive-zone
 
 Domain key: topology.kubernetes.io/zone   Snapshot 2026-09-13T20:45:22Z
 
@@ -59,19 +60,19 @@ knowing about: that budget can never be satisfied, so any node drain touching
 that pod hangs forever.
 
 ```sh
-kubectl survive                      # every zone
-kubectl survive --domain-key rack    # any node label
-kubectl survive -o json              # machine readable
+kubectl survive-zone                 # every zone
+kubectl survive-zone --domain-key rack  # any node label
+kubectl survive-zone -o json         # machine readable
 ```
 
-For every workload reported lost or degraded, `kubectl survive fix` proposes a
+For every workload reported lost or degraded, `kubectl survive-zone fix` proposes a
 ranked ladder of remediations and proves each one against your actual cluster
 before printing it:
 
 ```sh
-kubectl survive fix                        # print verified fixes for every failing workload
-kubectl survive fix checkout-api           # only this workload
-kubectl survive fix --out-dir ./patches    # write one patch file per fix instead
+kubectl survive-zone fix                        # print verified fixes for every failing workload
+kubectl survive-zone fix checkout-api           # only this workload
+kubectl survive-zone fix --out-dir ./patches    # write one patch file per fix instead
 ```
 
 Every fix printed has cleared two proofs, not one:
@@ -85,7 +86,7 @@ Every fix printed has cleared two proofs, not one:
 
 A fix that clears schedulability but not survivability is still shown,
 labelled `ALT` rather than `FIX`, because it helps without solving the
-problem. `kubectl survive fix` is read-only: it prints patches, or writes them
+problem. `kubectl survive-zone fix` is read-only: it prints patches, or writes them
 to `--out-dir`, and never touches the cluster itself.
 
 ## What it checks

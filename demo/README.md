@@ -9,7 +9,7 @@ PATH=$PWD/bin:$PATH vhs survive.tape
 ```
 
 Requires `vhs`, `ttyd`, `ffmpeg`, `kwokctl` and a running Docker, plus a
-`kubectl-survive` binary on `PATH`.
+`kubectl-survive_zone` binary on `PATH`.
 
 ## Why the cluster is built in two stages
 

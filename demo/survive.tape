@@ -1,4 +1,4 @@
-# kubectl survive - README demo.
+# kubectl survive-zone - README demo.
 #
 # Four beats: what kubectl tells you, what is actually true, what to do about
 # it, and proof that it worked. Every frame is real output from a real
@@ -6,7 +6,7 @@
 # no output is edited.
 
 Require kubectl
-Require kubectl-survive
+Require kubectl-survive_zone
 
 Output survive.gif
 
@@ -33,7 +33,7 @@ Enter
 Sleep 2500ms
 
 # --- Beat 2: what is actually true --------------------------------------
-Type "kubectl survive"
+Type "kubectl survive-zone"
 Sleep 600ms
 Enter
 Sleep 6s
@@ -43,7 +43,7 @@ Hide
 Type "clear" Enter
 Sleep 500ms
 Show
-Type "kubectl survive fix checkout-api"
+Type "kubectl survive-zone fix checkout-api"
 Sleep 600ms
 Enter
 Sleep 7s
@@ -57,7 +57,7 @@ Type "kubectl patch deploy checkout-api --patch-file spread.yaml"
 Sleep 400ms
 Enter
 Sleep 2s
-Type "kubectl survive"
+Type "kubectl survive-zone"
 Sleep 600ms
 Enter
 Sleep 5s

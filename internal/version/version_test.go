@@ -27,7 +27,7 @@ func TestStringShortensCommitAndNamesBinary(t *testing.T) {
 		Platform:  "linux/amd64",
 	}
 	got := i.String()
-	if !strings.HasPrefix(got, "kubectl-survive v1.2.3 (0123456) built 2026-09-14T00:00:00Z") {
+	if !strings.HasPrefix(got, "kubectl-survive_zone v1.2.3 (0123456) built 2026-09-14T00:00:00Z") {
 		t.Fatalf("unexpected rendering: %q", got)
 	}
 	if strings.Contains(got, "0123456789abcdef") {

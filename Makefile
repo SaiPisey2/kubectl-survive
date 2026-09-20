@@ -6,7 +6,7 @@ LDFLAGS := -s -w -X $(PKG).version=$(VERSION) -X $(PKG).commit=$(COMMIT) -X $(PK
 
 .PHONY: build test verify-deps verify-replaces snapshot release-check clean
 build:
-	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/kubectl-survive ./cmd/kubectl-survive
+	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/kubectl-survive_zone ./cmd/kubectl-survive_zone
 test:
 	go test ./... -count=1
 # The analysis core must stay free of the scheduler tree: spec §7.2 promises

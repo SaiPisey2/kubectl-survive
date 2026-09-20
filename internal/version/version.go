@@ -86,5 +86,5 @@ func (i Info) String() string {
 	if i.Date != "" {
 		s += " built " + i.Date
 	}
-	return fmt.Sprintf("kubectl-survive %s, %s %s", s, i.GoVersion, i.Platform)
+	return fmt.Sprintf("kubectl-survive_zone %s, %s %s", s, i.GoVersion, i.Platform)
 }
