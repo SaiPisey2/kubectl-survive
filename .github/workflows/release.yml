@@ -29,4 +29,4 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: krew-manifest
-          path: dist/krew/survive.yaml
+          path: dist/krew/*.yaml
