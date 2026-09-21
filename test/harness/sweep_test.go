@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/SaiPisey2/kubectl-survive/internal/domain"
+	"github.com/SaiPisey2/kubectl-survive/internal/draincheck"
+	"github.com/SaiPisey2/kubectl-survive/internal/sched"
 	"github.com/SaiPisey2/kubectl-survive/internal/snapshot"
 	"github.com/SaiPisey2/kubectl-survive/internal/survive"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -87,6 +89,20 @@ func TestScenarioSweep(t *testing.T) {
 					seed, len(report.Domains), len(sc.Zones))
 			}
 
+			// The static engine cannot see a satisfiable budget that still
+			// deadlocks a real drain because the replacement pod has nowhere
+			// to schedule outside the domain being drained (spec section 5.6);
+			// that requires the scheduler framework, which is why this is built
+			// here rather than folded into survive.Analyze itself.
+			dsc, err := sched.New(context.Background(), snap)
+			if err != nil {
+				t.Fatalf("seed %d: build scheduler: %v", seed, err)
+			}
+			deadlocks, err := draincheck.Detect(context.Background(), dsc, snap, domain.LabelZone)
+			if err != nil {
+				t.Fatalf("seed %d: draincheck.Detect: %v", seed, err)
+			}
+
 			// Every verdict must be a real outcome, never an empty string.
 			for _, d := range report.Domains {
 				for _, v := range d.Verdicts {
@@ -145,6 +161,18 @@ func TestScenarioSweep(t *testing.T) {
 				}
 			}
 
+			// The scheduler-backed check catches exactly the case the static one
+			// cannot: a satisfiable budget whose replacement pod has nowhere to
+			// schedule outside the domain being drained. Its findings merge into
+			// the same predictedBlock map so the two per-workload checks below do
+			// not need to know which detector caught which workload.
+			for _, f := range deadlocks {
+				if f.Namespace != ns {
+					continue
+				}
+				predictedBlock[f.PDB] = true
+			}
+
 			// Every workload whose eviction was actually refused must have had
 			// its budget flagged. Without this per-workload check, skipping a
 			// blocked workload in the survivor comparison could hide a real
@@ -156,14 +184,14 @@ func TestScenarioSweep(t *testing.T) {
 					continue
 				}
 				if c.unschedulableReplacement(t, app) {
-					// Known Milestone 3 gap: the budget is satisfiable in
-					// isolation, so pdbcheck cannot flag it; the deadlock comes
-					// from the spread constraint making the replacement pod
-					// unschedulable during the evacuation. Detecting it needs
-					// the scheduler framework (spec §7).
-					t.Logf("seed %d: %s hit the known drain-deadlock gap "+
-						"(satisfiable budget + enforced spread + unschedulable replacement); "+
-						"detecting this requires the Milestone 3 scheduler integration", seed, app)
+					// unschedulableReplacement stays as an observational cross-check:
+					// it independently confirms, from the real cluster's Pending
+					// condition, that a replacement genuinely could not schedule.
+					// draincheck.Detect above is now expected to have predicted this
+					// case, so reaching here with predictedBlock[app] still false is a
+					// real miss in the detector, not a known, accepted gap.
+					t.Errorf("seed %d: %s's replacement was unschedulable but draincheck did not predict it",
+						seed, app)
 					continue
 				}
 				t.Errorf("seed %d: %s had an eviction persistently refused but the engine did not flag its PDB as blocking",

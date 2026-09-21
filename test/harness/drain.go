@@ -181,10 +181,11 @@ func (c *Cluster) blockedApps(t *testing.T, blocked []string) map[string]bool {
 // unschedulableReplacement reports whether a workload has a replacement pod
 // stuck Pending — the signature of a drain deadlock that emerges from the
 // interaction of a disruption budget with an enforced spread constraint during
-// a zone evacuation. Detecting this class requires scheduling feasibility
-// analysis (the real scheduler framework), which is Milestone 3 work; the
-// engine's static budget arithmetic cannot see it, so the harness recognises it
-// rather than failing on it.
+// a zone evacuation. internal/draincheck now predicts this class from the
+// scheduler framework, so sweep_test.go expects it to already appear in
+// predictedBlock by the time this is consulted; this stays as an independent,
+// observational cross-check against the real cluster's Pending condition,
+// not as the thing that recognises the gap.
 func (c *Cluster) unschedulableReplacement(t *testing.T, app string) bool {
 	t.Helper()
 	pods, err := c.Client.CoreV1().Pods(metav1.NamespaceAll).List(context.Background(), listAll)

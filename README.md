@@ -100,6 +100,13 @@ to `--out-dir`, and never touches the cluster itself.
   immovable, whatever the spread constraints say.
 - **PodDisruptionBudgets that can never be satisfied**, which do not cause
   outages but do hang node drains indefinitely.
+- **Drain deadlocks that a satisfiable budget alone can't reveal.** A budget
+  can look fine in isolation and still hang a drain forever: evict the first
+  pod, and if an enforced spread constraint leaves the replacement with
+  nowhere to schedule outside the domain being drained, availability never
+  recovers and the budget refuses every later eviction. Seeing this needs the
+  real scheduler, not arithmetic, which is why it is reported alongside the
+  PDB findings above rather than folded into them.
 
 It is read-only. It never evicts, cordons, or deletes anything.
 
@@ -129,6 +136,10 @@ go test -tags harness ./test/harness/    # requires Docker and kwokctl
   spread — will see each rung reported as partial rather than one combined
   fix.
 - Cluster-external dependencies are invisible.
+- Drain-deadlock detection needs the real scheduler, so it is disabled on a
+  Kubernetes minor mismatch (the same version gate that disables `fix`
+  verification). Domain verdicts and PDB findings keep working regardless;
+  the command says plainly when the drain-deadlock check itself was skipped.
 
 ## Requires
 
