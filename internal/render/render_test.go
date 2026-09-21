@@ -3,6 +3,7 @@ package render
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/SaiPisey2/kubectl-survive/internal/pdbcheck"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/SaiPisey2/kubectl-survive/internal/domain"
+	"github.com/SaiPisey2/kubectl-survive/internal/draincheck"
 	"github.com/SaiPisey2/kubectl-survive/internal/spread"
 	"github.com/SaiPisey2/kubectl-survive/internal/survive"
 	"github.com/SaiPisey2/kubectl-survive/internal/volumepin"
@@ -123,6 +125,28 @@ func TestJSONIncludesAntiAffinityAndVolumePins(t *testing.T) {
 	}
 }
 
+// TestTableRendersDrainDeadlockFindings pins the drain-deadlock line style
+// against the existing PDB finding line, per spec 10.4: an operator reading
+// this output should not be able to tell, from formatting alone, that one
+// came from static PDB arithmetic and the other from the scheduler-backed
+// check in internal/draincheck.
+func TestTableRendersDrainDeadlockFindings(t *testing.T) {
+	var buf bytes.Buffer
+	deadlock := draincheck.Finding{
+		PDB:       "web-pdb",
+		Namespace: "default",
+		Domain:    "us-east-1a",
+		Detail:    "draining us-east-1a deadlocks: default/web's replacement cannot schedule outside it (node(s) didn't match Pod's node affinity/selector); the budget then refuses every later eviction",
+	}
+	if err := Table(&buf, sampleReport(), deadlock); err != nil {
+		t.Fatalf("Table() error = %v", err)
+	}
+	want := "PDB default/web-pdb: draining us-east-1a deadlocks: default/web's replacement cannot schedule outside it (node(s) didn't match Pod's node affinity/selector); the budget then refuses every later eviction\n"
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("table output does not contain the expected drain-deadlock line\ngot:\n%s\nwant substring:\n%s", buf.String(), want)
+	}
+}
+
 func TestJSONShape(t *testing.T) {
 	var buf bytes.Buffer
 	if err := JSON(&buf, sampleReport()); err != nil {
@@ -137,5 +161,46 @@ func TestJSONShape(t *testing.T) {
 	}
 	if _, ok := out["snapshotAt"]; !ok {
 		t.Error("missing snapshotAt")
+	}
+}
+
+// The JSON output carried no drain findings at all until 2026-09-22: a machine
+// consumer could not learn that a budget would hang a drain, while the table
+// said so plainly. These pin both detectors into the schema.
+func TestJSONCarriesBothKindsOfDrainFinding(t *testing.T) {
+	r := sampleReport()
+	r.PDBFindings = []pdbcheck.Finding{{
+		PDB: "session-store", Namespace: "default",
+		Block: pdbcheck.BlockNeverSatisfiable, Detail: "minAvailable resolves to 1 of 1 pods",
+	}}
+	deadlock := draincheck.Finding{
+		PDB: "checkout-api", Namespace: "default", Domain: "us-east-1a",
+		Detail: "draining us-east-1a deadlocks",
+	}
+
+	var buf bytes.Buffer
+	if err := JSON(&buf, r, deadlock); err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+	var got struct {
+		Findings []struct {
+			PDB, Namespace, Kind, Domain, Detail string
+		} `json:"drainFindings"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("output is not JSON: %v", err)
+	}
+	if len(got.Findings) != 2 {
+		t.Fatalf("want both findings, got %d: %s", len(got.Findings), buf.String())
+	}
+	kinds := map[string]string{}
+	for _, f := range got.Findings {
+		kinds[f.Kind] = f.PDB
+	}
+	if kinds["unsatisfiable"] != "session-store" {
+		t.Errorf("unsatisfiable budget missing from JSON: %v", kinds)
+	}
+	if kinds["drainDeadlock"] != "checkout-api" {
+		t.Errorf("drain deadlock missing from JSON: %v", kinds)
 	}
 }

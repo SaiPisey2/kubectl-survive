@@ -6,12 +6,17 @@ import (
 	"sort"
 	"text/tabwriter"
 
+	"github.com/SaiPisey2/kubectl-survive/internal/draincheck"
 	"github.com/SaiPisey2/kubectl-survive/internal/survive"
 )
 
 // Table prints only the workloads that lose availability. A list of everything
 // that is fine is not what an operator is reading for.
-func Table(w io.Writer, r *survive.Report) error {
+//
+// deadlocks is variadic so every existing call site (and every fixture built
+// before drain-deadlock detection existed) keeps compiling unchanged; pass
+// nothing when the scheduler-backed check did not run (see sched.Gate).
+func Table(w io.Writer, r *survive.Report, deadlocks ...draincheck.Finding) error {
 	fmt.Fprintf(w, "Domain key: %s   Snapshot %s\n\n", r.DomainKey, r.TakenAt.Format("2006-01-02T15:04:05Z"))
 
 	for _, d := range r.Domains {
@@ -44,6 +49,9 @@ func Table(w io.Writer, r *survive.Report) error {
 		if f.Block != "" {
 			fmt.Fprintf(w, "PDB %s/%s: %s\n", f.Namespace, f.PDB, f.Detail)
 		}
+	}
+	for _, f := range deadlocks {
+		fmt.Fprintf(w, "PDB %s/%s: %s\n", f.Namespace, f.PDB, f.Detail)
 	}
 	if len(r.UnlabelledNodes) > 0 {
 		fmt.Fprintf(w, "\n%d node(s) have no %s label; workloads on them are reported as unknown.\n",
