@@ -49,6 +49,7 @@ func NewCmd(streams genericiooptions.IOStreams) *cobra.Command {
 	cmd.SetVersionTemplate("{{.Version}}\n")
 	cmd.AddCommand(newVersionCmd(streams))
 	cmd.AddCommand(newFixCmd(streams))
+	cmd.AddCommand(newExportCmd(streams))
 	return cmd
 }
 
