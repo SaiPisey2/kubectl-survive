@@ -126,6 +126,40 @@ func (s *Scheduler) PlaceReplacing(ctx context.Context, pod *corev1.Pod, replica
 	return s.Place(ctx, pod, replicas, domainKey)
 }
 
+// FitsReplacing reports where pod could schedule with replacing's pods
+// withdrawn from the cluster view first, mirroring PlaceReplacing's
+// eviction-aware accounting but returning the raw per-node Filter verdicts
+// instead of choosing and committing to one.
+//
+// PlaceReplacing's first-fit is the right choice when the caller only needs
+// to know "does this fit somewhere" -- a rollout doesn't care which of the
+// acceptable nodes it lands on. Some callers need more: a domain-drain check
+// must know not merely whether a replacement fits, but whether it fits
+// *outside a specific domain*, since a real drain cordons every node in that
+// domain rather than removing it from the cluster. Excluding a domain by
+// giving the candidate a node-affinity term looks equivalent but is not: the
+// PodTopologySpread plugin's default NodeAffinityPolicy (Honor) drops any
+// domain the pod's own affinity already excludes from its skew computation
+// entirely, which loosens the very constraint the caller is trying to
+// evaluate honestly and produces false negatives. Filtering the *results* of
+// an unmodified Fits call, after the eviction-aware withdrawal, keeps the
+// spread plugin computing skew against the real domain layout while still
+// letting the caller reject nodes in the domain being drained.
+func (s *Scheduler) FitsReplacing(ctx context.Context, pod *corev1.Pod, domainKey string, replacing []*corev1.Pod) (_ []Fit, err error) {
+	withdrawn, werr := s.withdrawExisting(replacing)
+	if werr != nil {
+		return nil, fmt.Errorf("withdrawing the pods being replaced: %w", werr)
+	}
+	defer func() {
+		if rerr := s.reinstate(withdrawn); rerr != nil && err == nil {
+			// Leaving the workload's real pods out of the cache would corrupt
+			// every later answer just as surely as leaving a simulated one in.
+			err = fmt.Errorf("restoring the replaced pods: %w", rerr)
+		}
+	}()
+	return s.Fits(ctx, pod, domainKey)
+}
+
 // withdrawExisting removes pods' assigned members from the cache ahead of a
 // PlaceReplacing simulation, returning exactly the pods it removed so they
 // can be put back.

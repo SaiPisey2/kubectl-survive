@@ -45,7 +45,8 @@ func Gate(serverGitVersion string) VersionGate {
 	g.Warning = fmt.Sprintf(
 		"Warning: this build targets Kubernetes %s; cluster reports %s.\n"+
 			"  Survivability analysis: OK (version-independent).\n"+
-			"  Fix verification:       DISABLED - cannot confirm fixes still schedule.",
+			"  Fix verification:       DISABLED - cannot confirm fixes still schedule.\n"+
+			"  Drain-deadlock detection: DISABLED - cannot confirm replacement scheduling.",
 		TargetMinor, shown)
 	return g
 }
