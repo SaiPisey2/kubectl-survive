@@ -3,6 +3,7 @@ module github.com/SaiPisey2/kubectl-survive
 go 1.26.5
 
 require (
+	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2
 	k8s.io/api v0.35.7
 	k8s.io/apimachinery v0.35.7
@@ -18,7 +19,6 @@ require (
 	github.com/google/cel-go v0.26.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
@@ -90,7 +90,7 @@ require (
 	sigs.k8s.io/kustomize/kyaml v0.20.1 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
-	sigs.k8s.io/yaml v1.6.0 // indirect
+	sigs.k8s.io/yaml v1.6.0
 )
 
 replace k8s.io/api => k8s.io/api v0.35.7
