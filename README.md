@@ -110,6 +110,96 @@ to `--out-dir`, and never touches the cluster itself.
 
 It is read-only. It never evicts, cordons, or deletes anything.
 
+## Exporter mode
+
+Survivability **decays**: nothing changes in git, a node drains, and a
+workload that used to spread across zones no longer does. A command someone
+has to remember to run cannot catch that; a scrape can.
+
+```sh
+kubectl survive-zone export --listen :9090 --domain-key topology.kubernetes.io/zone --interval 60s
+```
+
+This re-runs the same read-only analysis as the default command on a timer
+and serves it at `/metrics`. Analysis runs on its own background loop, never
+on the HTTP handler's goroutine, so a slow analysis pass delays the next
+reading, not a concurrent scrape.
+
+`--interval` defaults to 60s. A full snapshot fetch plus analysis is not
+free — the drain-verification harness measured single scenarios at roughly
+6.6s on Apple Silicon and 25s on a GitHub Actions runner, though those are
+drain scenarios (which simulate repeated evictions), not the exporter's
+single analysis pass. 60s stays comfortably clear of that ceiling while still
+catching a drain-induced regression within a minute of it happening.
+`--analysis-timeout` (default 2m) bounds a single cycle so a hung API call
+cannot silently stop the exporter from ever completing another one.
+
+### Metrics
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `survive_workloads_lost` | `domain` | Workloads with zero surviving replicas if this domain is lost. |
+| `survive_workloads_degraded` | `domain` | Workloads that fall below their PodDisruptionBudget if this domain is lost. |
+| `survive_workload_survives` | `workload`, `domain` | 1 if the workload keeps availability after losing this domain, 0 otherwise (lost, degraded, or unknown). |
+| `survive_pdb_unsatisfiable` | `pdb` | 1 if this PodDisruptionBudget can never permit an eviction. |
+| `survive_drain_deadlock` | `pdb`, `domain` | 1 if draining this domain deadlocks: the budget is satisfiable in isolation, but the scheduler cannot place the replacement outside the domain. |
+| `survive_drain_deadlock_check_enabled` | — | 1 if the scheduler-backed check ran this cycle, 0 if the version gate skipped it. A cluster with nothing wrong and a cluster where this check didn't run must never look the same, so this is reported separately from the finding itself. |
+| `survive_unlabelled_nodes` | — | Nodes with no value for the domain-key label; workloads on them are `unknown`, never `survives`. |
+| `survive_scrape_success` | — | 1 if the last analysis cycle completed, 0 if it errored. |
+| `survive_scrape_errors_total` | — | Cumulative failed analysis cycles. |
+| `survive_last_success_timestamp_seconds` | — | Unix time of the last successful analysis. Compare against `time()` to detect a stale exporter even while every finding still reports its last good reading. |
+| `survive_last_analysis_duration_seconds` | — | Wall-clock time of the last cycle, successful or not. |
+
+**Why `workload` is `<namespace>/<name>`, not the bare name:** a bare name
+collides across namespaces, and a separate `namespace` label multiplies
+cardinality for no benefit over folding it into one value.
+
+**Why PDB-backed findings are labelled `pdb`, not `workload`:**
+`pdbcheck.Finding` and `draincheck.Finding` are keyed by the
+PodDisruptionBudget object, not by the workload it protects — a PDB's
+selector isn't resolved back to a single owner. In the common case the PDB is
+named after its workload, so this still answers what you'd expect to ask.
+
+**Cardinality:** `survive_workload_survives` is one series per
+workload-per-domain, reset and fully repopulated every cycle so a deleted
+workload's series disappears on the next scrape rather than accumulating.
+For 2,000 workloads across 3 zones that is 6,000 series from one metric —
+well inside what a single Prometheus scraping one cluster handles, and it is
+also the metric the regression alert depends on directly, so it is not
+filtered down to "only the unhealthy ones": doing that would make a
+newly-lost workload look identical to a series that was simply never
+created, and `changes()`/`resets()`-based alerting needs the continuous 0/1
+series to tell those apart. What is deliberately *not* a label anywhere:
+free-text reasons (`Verdict.Reason`, `Finding.Detail`) — those belong in the
+table/JSON output, and putting unbounded operator-written or generated text
+into a label value is the actual cardinality risk, not the workload count.
+
+### The regression alert
+
+The alert this exporter exists to make possible — see
+[`deploy/prometheus-rules.yaml`](deploy/prometheus-rules.yaml):
+
+```yaml
+- alert: SurvivabilityRegressed
+  expr: |
+    survive_workload_survives == 0
+    and survive_workload_survives offset 1h == 1
+    and survive_scrape_success == 1
+  for: 5m
+```
+
+It fires when a workload's survivability flips from 1 to 0 with the exporter
+itself healthy — a node drain, cordon, or manual scale, not a deploy a CI
+gate would already have caught. The same file also carries
+`SurviveExporterStale` (the exporter hasn't completed an analysis recently:
+every other alert is meaningless while this one is firing) and alerts for
+unsatisfiable PDBs and drain deadlocks.
+
+[`deploy/grafana-panel.json`](deploy/grafana-panel.json) has a dashboard panel
+set built against these metrics, and [`deploy/`](deploy/) has the Deployment,
+ServiceAccount, ClusterRole, ClusterRoleBinding and Service to run the
+exporter in-cluster with the spec §11 read-only RBAC.
+
 ## Correctness
 
 Verdicts are checked against a real Kubernetes control plane, not against

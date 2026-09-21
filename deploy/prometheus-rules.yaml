@@ -1,0 +1,89 @@
+# The alert this project exists to demonstrate: survivability regressed and
+# nothing in git changed. It compares the current reading against itself an
+# hour ago, so it fires on a node drain, a manual scale-down, or any other
+# runtime change -- never on a deploy, which a git-diff-based check would
+# already have caught.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: kubectl-survive-exporter
+  namespace: kubectl-survive
+  labels:
+    app.kubernetes.io/name: kubectl-survive-exporter
+spec:
+  groups:
+    - name: kubectl-survive.rules
+      rules:
+        # The signature alert: a workload that survived losing this domain an
+        # hour ago no longer does, and the exporter itself is healthy right
+        # now -- so this is a real regression, not a stale or broken reading.
+        - alert: SurvivabilityRegressed
+          expr: |
+            survive_workload_survives == 0
+            and survive_workload_survives offset 1h == 1
+            and survive_scrape_success == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.workload }} no longer survives losing {{ $labels.domain }}"
+            description: >-
+              {{ $labels.workload }} survived losing domain {{ $labels.domain }}
+              an hour ago and does not now. Nothing in git has to have changed
+              for this to happen -- a node drain or a manual scale is enough.
+              Run `kubectl survive-zone` for the current placement, or
+              `kubectl survive-zone fix {{ $labels.workload }}` for a verified
+              remediation.
+
+        # The silent-failure-mode guard: every other alert here is only
+        # meaningful while the exporter itself is producing fresh data. This
+        # is what tells the difference between "nothing is wrong" and "we
+        # stopped being able to tell".
+        - alert: SurviveExporterStale
+          expr: time() - survive_last_success_timestamp_seconds > 300
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "kubectl-survive exporter has not completed an analysis in over 5 minutes"
+            description: >-
+              Every survive_* finding metric is now stale. This is not the
+              same as a healthy cluster -- it means the exporter cannot
+              currently prove anything, which is exactly the failure mode
+              this project exists to prevent going unnoticed.
+
+        - alert: SurviveExporterAnalysisFailing
+          expr: increase(survive_scrape_errors_total[10m]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "kubectl-survive exporter analysis is erroring"
+            description: >-
+              At least one analysis cycle failed in the last 10 minutes
+              (snapshot fetch, scheduler build, or drain-deadlock detection).
+              Findings currently served are the last successful reading, not
+              necessarily current -- check survive_last_success_timestamp_seconds.
+
+        - alert: SurvivePDBUnsatisfiable
+          expr: survive_pdb_unsatisfiable == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PodDisruptionBudget {{ $labels.pdb }} can never permit an eviction"
+            description: >-
+              This budget will hang any drain or upgrade that touches it
+              indefinitely, independent of any zone failure.
+
+        - alert: SurviveDrainDeadlock
+          expr: survive_drain_deadlock == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Draining {{ $labels.domain }} will deadlock on PDB {{ $labels.pdb }}"
+            description: >-
+              The budget is satisfiable in isolation, but the replacement pod
+              for an eviction in {{ $labels.domain }} cannot schedule outside
+              it -- the drain will hang the moment that eviction happens for
+              real.

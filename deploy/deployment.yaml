@@ -1,0 +1,65 @@
+# No container image is published by .goreleaser.yaml yet -- only the krew
+# binary archives are. The image reference below is a placeholder for
+# whichever registry that gets wired up in; build one locally with a
+# Dockerfile that just COPYs the kubectl-survive_zone binary in and runs
+# `kubectl-survive_zone export` as the entrypoint, or run the binary directly
+# on a host with in-cluster kubeconfig, if you want to try this before that
+# lands.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubectl-survive-exporter
+  namespace: kubectl-survive
+  labels:
+    app.kubernetes.io/name: kubectl-survive-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubectl-survive-exporter
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kubectl-survive-exporter
+    spec:
+      serviceAccountName: kubectl-survive-exporter
+      containers:
+        - name: exporter
+          image: ghcr.io/saipisey2/kubectl-survive:v0.2.1
+          args:
+            - survive-zone
+            - export
+            - --listen=:9090
+            - --domain-key=topology.kubernetes.io/zone
+            - --interval=60s
+          ports:
+            - name: metrics
+              containerPort: 9090
+          # This binary only reads the API server; it has nothing else to
+          # wait on, so a working /metrics response is a meaningful readiness
+          # signal, not a rubber stamp.
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubectl-survive-exporter
+  namespace: kubectl-survive
+  labels:
+    app.kubernetes.io/name: kubectl-survive-exporter
+spec:
+  selector:
+    app.kubernetes.io/name: kubectl-survive-exporter
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics

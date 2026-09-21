@@ -1,0 +1,43 @@
+# Read-only RBAC for kubectl-survive's exporter, exactly as spec §11
+# specifies for the tool as a whole. No Secrets, no ConfigMap contents (only
+# references are followed by name). --fix --apply is out of scope for the
+# exporter entirely and is never implied by this role.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubectl-survive-exporter
+  namespace: kubectl-survive
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubectl-survive-reader
+rules:
+  - apiGroups: [""]
+    resources: [nodes, pods, services, persistentvolumeclaims, persistentvolumes, namespaces]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets, replicasets]
+    verbs: [get, list]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses, csinodes]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kubectl-survive-exporter-reader
+subjects:
+  - kind: ServiceAccount
+    name: kubectl-survive-exporter
+    namespace: kubectl-survive
+roleRef:
+  kind: ClusterRole
+  name: kubectl-survive-reader
+  apiGroup: rbac.authorization.k8s.io

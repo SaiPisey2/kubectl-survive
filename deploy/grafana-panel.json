@@ -1,0 +1,142 @@
+{
+  "title": "kubectl-survive: survivability regression",
+  "description": "Demonstrates the alert this project exists to make possible: survivability regressed and nothing in git changed. Import as a panel (or paste into a dashboard's panels[] array) against a Prometheus datasource scraping kubectl-survive's exporter.",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Workload survives losing domain (0 = lost)",
+      "description": "One series per workload/domain pair. A series dropping from 1 to 0 with no corresponding deploy is exactly the SurvivabilityRegressed alert condition.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        {
+          "expr": "survive_workload_survives",
+          "legendFormat": "{{workload}} / {{domain}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "spanNulls": false,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Exporter health",
+      "description": "1 = last analysis cycle succeeded. Paired with staleness (below), this is what tells a healthy cluster apart from a broken exporter -- both otherwise look like zero findings.",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "survive_scrape_success", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "FAILING", "color": "red" }, "1": { "text": "OK", "color": "green" } } }
+          ]
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Seconds since last successful analysis",
+      "description": "Freshness of every survive_* finding. A large, growing number means the metrics below are stale, not that nothing is wrong.",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "time() - survive_last_success_timestamp_seconds", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 180 },
+              { "color": "red", "value": 300 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Drain-deadlock check enabled",
+      "description": "0 means the scheduler-backed check was skipped by the version gate for this cycle, not that it ran and found nothing.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "survive_drain_deadlock_check_enabled", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "SKIPPED (version gate)", "color": "orange" }, "1": { "text": "RUNNING", "color": "green" } } }
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Nodes missing the domain-key label",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [{ "expr": "survive_unlabelled_nodes", "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Domains losing workloads right now",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "expr": "survive_workloads_lost", "format": "table", "instant": true, "refId": "A" },
+        { "expr": "survive_workloads_degraded", "format": "table", "instant": true, "refId": "B" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Drains that will deadlock (draincheck)",
+      "description": "A satisfiable PodDisruptionBudget whose replacement pod cannot schedule outside the domain being drained -- a scheduler-backed signal spec §5.6 predates.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "targets": [
+        { "expr": "survive_drain_deadlock == 1", "format": "table", "instant": true, "refId": "A" }
+      ]
+    }
+  ],
+  "templating": {
+    "list": [
+      { "name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus" }
+    ]
+  }
+}
