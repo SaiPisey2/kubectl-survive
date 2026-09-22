@@ -9,6 +9,7 @@ import (
 
 	"github.com/SaiPisey2/kubectl-survive/internal/draincheck"
 	"github.com/SaiPisey2/kubectl-survive/internal/survive"
+	"github.com/SaiPisey2/kubectl-survive/internal/workload"
 )
 
 // Table prints only the workloads that lose availability. A list of everything
@@ -50,6 +51,13 @@ func Table(w io.Writer, r *survive.Report, deadlocks ...draincheck.Finding) erro
 		// §5.5, ruling 1): their own pods survive, so they never appear in
 		// the loop above, but an operator still needs to see why they are
 		// named at all.
+		// An impaired workload's own placement is the argument: it is usually
+		// spread cleanly across every domain, and it still stops serving.
+		// Its verdict in this domain is "survives", so the placement is there.
+		placementOf := map[workload.Ref]map[string]int{}
+		for _, v := range d.Verdicts {
+			placementOf[v.Workload] = v.Placement
+		}
 		for _, imp := range d.Impairments {
 			// imp.Chain starts with the workload's own name (spec §5.5's
 			// "web -> session-store" example); it is dropped here because the
@@ -59,7 +67,8 @@ func Table(w io.Writer, r *survive.Report, deadlocks ...draincheck.Finding) erro
 			if len(rest) > 0 {
 				rest = rest[1:]
 			}
-			fmt.Fprintf(tw, "  %s\t\tIMPAIRED depends on %s\n", imp.Workload.Name, chain(rest))
+			fmt.Fprintf(tw, "  %s\t%s\tIMPAIRED depends on %s\n",
+				imp.Workload.Name, placement(placementOf[imp.Workload]), chain(rest))
 		}
 		tw.Flush()
 		fmt.Fprintln(w)
