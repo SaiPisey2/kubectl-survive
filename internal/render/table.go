@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/SaiPisey2/kubectl-survive/internal/draincheck"
@@ -20,7 +21,11 @@ func Table(w io.Writer, r *survive.Report, deadlocks ...draincheck.Finding) erro
 	fmt.Fprintf(w, "Domain key: %s   Snapshot %s\n\n", r.DomainKey, r.TakenAt.Format("2006-01-02T15:04:05Z"))
 
 	for _, d := range r.Domains {
-		fmt.Fprintf(w, "Losing %s  ->  %d lost, %d degraded\n", d.Domain, d.Lost, d.Degraded)
+		fmt.Fprintf(w, "Losing %s  ->  %d lost, %d degraded", d.Domain, d.Lost, d.Degraded)
+		if d.Impaired > 0 {
+			fmt.Fprintf(w, ", %d impaired by a dependency", d.Impaired)
+		}
+		fmt.Fprintln(w)
 
 		// A domain with nothing wrong gets its summary line and nothing else.
 		// A header with no rows under it reads as a truncated table rather than
@@ -40,6 +45,21 @@ func Table(w io.Writer, r *survive.Report, deadlocks ...draincheck.Finding) erro
 			for _, pin := range v.VolumePins {
 				fmt.Fprintf(tw, "      volume %s is pinned to %s\t\t\n", pin.PV, pin.Domain)
 			}
+		}
+		// Impaired workloads are a separate layer from Lost/Degraded (spec
+		// §5.5, ruling 1): their own pods survive, so they never appear in
+		// the loop above, but an operator still needs to see why they are
+		// named at all.
+		for _, imp := range d.Impairments {
+			// imp.Chain starts with the workload's own name (spec §5.5's
+			// "web -> session-store" example); it is dropped here because the
+			// row is already labeled with it, so only the actual path to the
+			// failing dependency is printed.
+			rest := imp.Chain
+			if len(rest) > 0 {
+				rest = rest[1:]
+			}
+			fmt.Fprintf(tw, "  %s\t\tIMPAIRED depends on %s\n", imp.Workload.Name, chain(rest))
 		}
 		tw.Flush()
 		fmt.Fprintln(w)
@@ -101,5 +121,9 @@ func anyAffected(d survive.DomainResult) bool {
 			return true
 		}
 	}
-	return false
+	return d.Impaired > 0
+}
+
+func chain(c []string) string {
+	return strings.Join(c, " -> ")
 }

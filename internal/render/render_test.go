@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SaiPisey2/kubectl-survive/internal/depgraph"
 	"github.com/SaiPisey2/kubectl-survive/internal/domain"
 	"github.com/SaiPisey2/kubectl-survive/internal/draincheck"
 	"github.com/SaiPisey2/kubectl-survive/internal/spread"
@@ -65,6 +66,93 @@ func TestTableGolden(t *testing.T) {
 	}
 	if buf.String() != string(want) {
 		t.Errorf("output mismatch\n--- got ---\n%s\n--- want ---\n%s", buf.String(), want)
+	}
+}
+
+// reportWithImpairment covers the dependency layer added for spec §5.5: a
+// workload whose own pods survive the domain's loss but that is impaired
+// because a Service-resolved dependency is lost there. Its own Outcome stays
+// Survives -- ruling 1 -- but it must still appear in the table because the
+// domain has something worth reporting, even with zero Lost/Degraded.
+func reportWithImpairment() *survive.Report {
+	return &survive.Report{
+		TakenAt:   time.Date(2026, 9, 12, 9, 14, 3, 0, time.UTC),
+		DomainKey: domain.LabelZone,
+		Domains: []survive.DomainResult{{
+			Domain:   "us-east-1a",
+			Impaired: 1,
+			Verdicts: []survive.Verdict{{
+				Workload:  workload.Ref{Kind: "Deployment", Namespace: "default", Name: "web"},
+				Outcome:   survive.OutcomeSurvives,
+				Reason:    "2 of 2 replicas remain outside us-east-1a",
+				Placement: map[string]int{"us-east-1a": 1, "us-east-1b": 1},
+				DependsOn: []string{"default/session-store"},
+			}, {
+				Workload:  workload.Ref{Kind: "StatefulSet", Namespace: "default", Name: "session-store"},
+				Outcome:   survive.OutcomeLost,
+				Reason:    "all 1 available replicas are in us-east-1a",
+				Placement: map[string]int{"us-east-1a": 1},
+			}},
+			Impairments: []depgraph.Impairment{{
+				Workload: workload.Ref{Kind: "Deployment", Namespace: "default", Name: "web"},
+				Domain:   "us-east-1a",
+				Chain:    []string{"web", "session-store"},
+			}},
+		}},
+	}
+}
+
+func TestTableGoldenImpaired(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Table(&buf, reportWithImpairment()); err != nil {
+		t.Fatalf("Table() error = %v", err)
+	}
+	golden := filepath.Join("testdata", "impaired.golden")
+	if update {
+		if err := os.WriteFile(golden, buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("read golden: %v (run with UPDATE_GOLDEN=1 to create)", err)
+	}
+	if buf.String() != string(want) {
+		t.Errorf("output mismatch\n--- got ---\n%s\n--- want ---\n%s", buf.String(), want)
+	}
+}
+
+func TestJSONIncludesDependsOnAndImpairments(t *testing.T) {
+	var buf bytes.Buffer
+	if err := JSON(&buf, reportWithImpairment()); err != nil {
+		t.Fatalf("JSON() error = %v", err)
+	}
+	var out struct {
+		Domains []struct {
+			Impaired  int `json:"workloadsImpaired"`
+			Workloads []struct {
+				Name      string   `json:"name"`
+				DependsOn []string `json:"dependsOn"`
+			} `json:"workloads"`
+			Impairments []struct {
+				Name  string   `json:"name"`
+				Chain []string `json:"chain"`
+			} `json:"impairments"`
+		} `json:"domains"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	d := out.Domains[0]
+	if d.Impaired != 1 {
+		t.Errorf("workloadsImpaired = %d, want 1", d.Impaired)
+	}
+	if len(d.Impairments) != 1 || d.Impairments[0].Name != "web" {
+		t.Fatalf("impairments = %+v, want one entry for web", d.Impairments)
+	}
+	wantChain := []string{"web", "session-store"}
+	if len(d.Impairments[0].Chain) != 2 || d.Impairments[0].Chain[0] != wantChain[0] || d.Impairments[0].Chain[1] != wantChain[1] {
+		t.Errorf("chain = %v, want %v", d.Impairments[0].Chain, wantChain)
 	}
 }
 

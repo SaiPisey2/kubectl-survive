@@ -31,13 +31,28 @@ type jsonWorkload struct {
 	Spread       string         `json:"spreadState"`
 	AntiAffinity string         `json:"antiAffinity"`
 	VolumePins   []string       `json:"volumePins,omitempty"`
+	// DependsOn names this workload's direct Service-resolved dependencies
+	// (spec §5.5, §8.4). It does not vary by domain.
+	DependsOn []string `json:"dependsOn,omitempty"`
+}
+
+// jsonImpairment reports a workload that is not itself lost in this domain
+// but transitively depends -- through one or more Services -- on something
+// that is (spec §5.5, ruling 1: a layer separate from workloadsLost).
+type jsonImpairment struct {
+	Namespace string   `json:"namespace"`
+	Name      string   `json:"name"`
+	Kind      string   `json:"kind"`
+	Chain     []string `json:"chain"`
 }
 
 type jsonDomain struct {
-	Name      string         `json:"name"`
-	Lost      int            `json:"workloadsLost"`
-	Degraded  int            `json:"workloadsDegraded"`
-	Workloads []jsonWorkload `json:"workloads"`
+	Name        string           `json:"name"`
+	Lost        int              `json:"workloadsLost"`
+	Degraded    int              `json:"workloadsDegraded"`
+	Impaired    int              `json:"workloadsImpaired"`
+	Workloads   []jsonWorkload   `json:"workloads"`
+	Impairments []jsonImpairment `json:"impairments,omitempty"`
 }
 
 type jsonReport struct {
@@ -78,7 +93,7 @@ func JSON(w io.Writer, r *survive.Report, deadlocks ...draincheck.Finding) error
 	}
 
 	for _, d := range r.Domains {
-		jd := jsonDomain{Name: d.Domain, Lost: d.Lost, Degraded: d.Degraded}
+		jd := jsonDomain{Name: d.Domain, Lost: d.Lost, Degraded: d.Degraded, Impaired: d.Impaired}
 		for _, v := range d.Verdicts {
 			var pins []string
 			for _, pin := range v.VolumePins {
@@ -95,6 +110,15 @@ func JSON(w io.Writer, r *survive.Report, deadlocks ...draincheck.Finding) error
 				Spread:       string(v.Spread.State),
 				AntiAffinity: string(v.AntiAffinity.State),
 				VolumePins:   pins,
+				DependsOn:    v.DependsOn,
+			})
+		}
+		for _, imp := range d.Impairments {
+			jd.Impairments = append(jd.Impairments, jsonImpairment{
+				Namespace: imp.Workload.Namespace,
+				Name:      imp.Workload.Name,
+				Kind:      imp.Workload.Kind,
+				Chain:     imp.Chain,
 			})
 		}
 		out.Domains = append(out.Domains, jd)

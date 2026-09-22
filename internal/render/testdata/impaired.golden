@@ -1,0 +1,7 @@
+Domain key: topology.kubernetes.io/zone   Snapshot 2026-09-12T09:14:03Z
+
+Losing us-east-1a  ->  0 lost, 0 degraded, 1 impaired by a dependency
+  WORKLOAD       PLACEMENT     VERDICT
+  session-store  us-east-1a:1  LOST all 1 available replicas are in us-east-1a
+  web                          IMPAIRED depends on session-store
+
