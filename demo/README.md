@@ -27,3 +27,13 @@ would have piled it into `us-east-1a` too.
 The control plane is pinned with `KWOK_KUBE_VERSION` to the Kubernetes minor
 this build targets. Without the pin the fix proofs disable themselves with a
 version warning, and the demo would record the warning instead of the feature.
+
+## The dependency
+
+`web` is deployed with `SESSIONS=redis://session-store:6379/0` as a literal
+environment value, and `session-store` has a real Service. The tool follows the
+Service to its EndpointSlice, finds the only backing pod in `us-east-1a`, and
+reports `web` as impaired there even though `web` itself is spread one replica
+per zone. `web` also points at `orders-db`, an ExternalName Service for a
+managed database; that is listed as a dependency and never reported as
+impairing, because its placement cannot be proven from the cluster.

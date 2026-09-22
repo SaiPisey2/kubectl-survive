@@ -26,5 +26,12 @@ spec:
       containers:
         - name: app
           image: registry.k8s.io/pause:3.9
+          # Literal values are the only dependency source the tool reads; it
+          # never reads ConfigMap or Secret contents.
+          env:
+            - name: SESSIONS
+              value: redis://session-store:6379/0
+            - name: DATABASE_URL
+              value: postgres://orders-db:5432/orders
           resources:
             requests: {cpu: 100m, memory: 128Mi}

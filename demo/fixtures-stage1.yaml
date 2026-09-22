@@ -66,3 +66,28 @@ spec:
   minAvailable: 1
   selector:
     matchLabels: {app: session-store}
+---
+# web calls session-store over this Service. Its EndpointSlice is produced by
+# the real endpointslice controller, which is where the tool learns that the
+# only backing pod sits in us-east-1a.
+apiVersion: v1
+kind: Service
+metadata:
+  name: session-store
+  namespace: default
+spec:
+  selector: {app: session-store}
+  ports:
+    - port: 6379
+---
+# A managed database outside the cluster. Its placement cannot be proven from
+# the cluster, so the tool lists it as a dependency and never reports it as
+# impairing anything.
+apiVersion: v1
+kind: Service
+metadata:
+  name: orders-db
+  namespace: default
+spec:
+  type: ExternalName
+  externalName: orders.abc123.us-east-1.rds.amazonaws.com

@@ -11,8 +11,8 @@ Require kubectl-survive_zone
 Output survive.gif
 
 Set Shell "bash"
-Set FontSize 20
-Set Width 1280
+Set FontSize 19
+Set Width 1500
 Set Height 940
 Set Padding 20
 Set WindowBar Colorful
