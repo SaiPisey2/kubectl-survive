@@ -19,7 +19,8 @@ test:
 # lives in internal/verify instead.
 CORE := ./internal/domain/... ./internal/health/... ./internal/snapshot/... \
         ./internal/workload/... ./internal/pdbcheck/... ./internal/spread/... \
-        ./internal/volumepin/... ./internal/survive/... ./internal/fix/...
+        ./internal/volumepin/... ./internal/survive/... ./internal/fix/... \
+        ./internal/depgraph/...
 
 verify-deps:
 	@if go list -deps $(CORE) | grep -q '^k8s.io/kubernetes'; then \
