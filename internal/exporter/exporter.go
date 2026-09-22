@@ -49,13 +49,14 @@ type Exporter struct {
 	newScheduler schedulerBuilder
 	detect       deadlockDetector
 
-	workloadsLost     *prometheus.GaugeVec
-	workloadsDegraded *prometheus.GaugeVec
-	workloadSurvives  *prometheus.GaugeVec
-	pdbUnsatisfiable  *prometheus.GaugeVec
-	drainDeadlock     *prometheus.GaugeVec
-	drainCheckEnabled prometheus.Gauge
-	unlabelledNodes   prometheus.Gauge
+	workloadsLost      *prometheus.GaugeVec
+	workloadsDegraded  *prometheus.GaugeVec
+	workloadSurvives   *prometheus.GaugeVec
+	dependencyImpaired *prometheus.GaugeVec
+	pdbUnsatisfiable   *prometheus.GaugeVec
+	drainDeadlock      *prometheus.GaugeVec
+	drainCheckEnabled  prometheus.Gauge
+	unlabelledNodes    prometheus.Gauge
 
 	scrapeSuccess        prometheus.Gauge
 	scrapeErrorsTotal    prometheus.Counter
@@ -90,6 +91,14 @@ func New(domainKey string) *Exporter {
 		workloadSurvives: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "survive_workload_survives",
 			Help: "1 if the workload keeps availability after losing this domain, 0 otherwise (includes degraded and unknown).",
+		}, []string{"workload", "domain"}),
+		// This is a layer separate from workload_survives (spec §5.5, ruling
+		// 1): a workload can survive its own pod arithmetic (1 above) while
+		// still being impaired here, because something it depends on through
+		// a Service is lost or unknown in this domain.
+		dependencyImpaired: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "survive_workload_dependency_impaired",
+			Help: "1 if the workload survives its own pod loss in this domain but transitively depends, through a Service, on something lost or unknown there; 0 otherwise.",
 		}, []string{"workload", "domain"}),
 		// pdbcheck.Finding and draincheck.Finding are keyed by the
 		// PodDisruptionBudget, not by the workload it protects -- a PDB's
@@ -133,7 +142,7 @@ func New(domainKey string) *Exporter {
 	}
 
 	e.registry.MustRegister(
-		e.workloadsLost, e.workloadsDegraded, e.workloadSurvives,
+		e.workloadsLost, e.workloadsDegraded, e.workloadSurvives, e.dependencyImpaired,
 		e.pdbUnsatisfiable, e.drainDeadlock, e.drainCheckEnabled, e.unlabelledNodes,
 		e.scrapeSuccess, e.scrapeErrorsTotal, e.lastSuccessTimestamp, e.lastDuration,
 	)
@@ -228,6 +237,7 @@ func (e *Exporter) record(report *survive.Report, gate sched.VersionGate, deadlo
 	e.workloadsLost.Reset()
 	e.workloadsDegraded.Reset()
 	e.workloadSurvives.Reset()
+	e.dependencyImpaired.Reset()
 	for _, d := range report.Domains {
 		e.workloadsLost.WithLabelValues(d.Domain).Set(float64(d.Lost))
 		e.workloadsDegraded.WithLabelValues(d.Domain).Set(float64(d.Degraded))
@@ -237,6 +247,17 @@ func (e *Exporter) record(report *survive.Report, gate sched.VersionGate, deadlo
 				survives = 1.0
 			}
 			e.workloadSurvives.WithLabelValues(v.Workload.String(), d.Domain).Set(survives)
+		}
+		impaired := map[string]bool{}
+		for _, imp := range d.Impairments {
+			impaired[imp.Workload.String()] = true
+		}
+		for _, v := range d.Verdicts {
+			value := 0.0
+			if impaired[v.Workload.String()] {
+				value = 1.0
+			}
+			e.dependencyImpaired.WithLabelValues(v.Workload.String(), d.Domain).Set(value)
 		}
 	}
 

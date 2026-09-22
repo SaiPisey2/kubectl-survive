@@ -14,6 +14,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -164,6 +165,61 @@ func TestDomainAndWorkloadMetrics(t *testing.T) {
 	mustContainLine(t, body, "survive_drain_deadlock_check_enabled 0")
 
 	mustContainLine(t, body, "survive_scrape_success 1")
+}
+
+// TestDependencyImpairedMetric proves survive_workload_dependency_impaired
+// is a separate layer from survive_workload_survives (spec §5.5, ruling 1):
+// web's own pods survive us-east-1a, so it reports survives=1 there, but it
+// still reports dependency_impaired=1 because session-store, which it
+// depends on through a Service, is lost there.
+func TestDependencyImpairedMetric(t *testing.T) {
+	_, webRS, webPods := deployWith("web", 2, []string{"n1a", "n1b"})
+	webPods[0].Spec.Containers = []corev1.Container{{
+		Name: "web",
+		Env:  []corev1.EnvVar{{Name: "SESSION_STORE_ADDR", Value: "http://session-store:6379"}},
+	}}
+	webPods[1].Spec.Containers = webPods[0].Spec.Containers
+
+	_, storeRS, storePods := deployWith("session-store", 1, []string{"n1a"})
+
+	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "session-store", Namespace: "default"}}
+	slice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "session-store-abc",
+			Namespace: "default",
+			Labels:    map[string]string{discoveryv1.LabelServiceName: "session-store"},
+		},
+		Endpoints: []discoveryv1.Endpoint{{
+			TargetRef: &corev1.ObjectReference{Kind: "Pod", Namespace: "default", Name: storePods[0].Name},
+		}},
+	}
+
+	snap := &snapshot.Snapshot{
+		TakenAt:     time.Now(),
+		Nodes:       []*corev1.Node{node("n1a", "us-east-1a"), node("n1b", "us-east-1b")},
+		Pods:        append(append([]*corev1.Pod{}, webPods...), storePods...),
+		ReplicaSets: []*appsv1.ReplicaSet{webRS, storeRS},
+		Deployments: []*appsv1.Deployment{
+			{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default", UID: webRS.OwnerReferences[0].UID}, Spec: appsv1.DeploymentSpec{Replicas: i32(2)}},
+			{ObjectMeta: metav1.ObjectMeta{Name: "session-store", Namespace: "default", UID: storeRS.OwnerReferences[0].UID}, Spec: appsv1.DeploymentSpec{Replicas: i32(1)}},
+		},
+		Services:       []*corev1.Service{svc},
+		EndpointSlices: []*discoveryv1.EndpointSlice{slice},
+	}
+
+	e := New(domain.LabelZone)
+	fetch := func(ctx context.Context) (*snapshot.Snapshot, sched.VersionGate, error) {
+		return snap, sched.VersionGate{Enabled: false, Warning: "gate disabled for this test"}, nil
+	}
+	if err := e.runOnce(context.Background(), fetch, time.Second); err != nil {
+		t.Fatalf("runOnce: %v", err)
+	}
+
+	body := scrape(t, e)
+	mustContainLine(t, body, `survive_workload_survives{domain="us-east-1a",workload="default/web"} 1`)
+	mustContainLine(t, body, `survive_workload_dependency_impaired{domain="us-east-1a",workload="default/web"} 1`)
+	mustContainLine(t, body, `survive_workload_dependency_impaired{domain="us-east-1a",workload="default/session-store"} 0`)
+	mustContainLine(t, body, `survive_workload_dependency_impaired{domain="us-east-1b",workload="default/web"} 0`)
 }
 
 func TestPDBUnsatisfiableMetric(t *testing.T) {
