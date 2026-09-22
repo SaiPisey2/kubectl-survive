@@ -220,7 +220,16 @@ unsatisfiable PDBs and drain deadlocks.
 [`deploy/grafana-panel.json`](deploy/grafana-panel.json) has a dashboard panel
 set built against these metrics, and [`deploy/`](deploy/) has the Deployment,
 ServiceAccount, ClusterRole, ClusterRoleBinding and Service to run the
-exporter in-cluster with the spec §11 read-only RBAC.
+exporter in-cluster with read-only RBAC:
+
+```sh
+kubectl apply -f deploy/namespace.yaml -f deploy/rbac.yaml \
+              -f deploy/service.yaml -f deploy/deployment.yaml
+```
+
+The image is `ghcr.io/saipisey2/kubectl-survive`, published for linux/amd64 and
+linux/arm64 with every release. It runs as a non-root user on a read-only root
+filesystem.
 
 ## Correctness
 
@@ -264,8 +273,9 @@ go test -tags harness ./test/harness/    # requires Docker and kwokctl
 
 ## Requires
 
-Go 1.26 to build. Read access to nodes, pods, PVs, PVCs, PDBs and the apps
-workloads. No writes, no in-cluster component.
+Go 1.26 to build. Read access to nodes, pods, Services, EndpointSlices, PVs,
+PVCs, PDBs and the apps workloads. No writes. The CLI needs nothing installed
+in the cluster; the exporter is optional.
 
 ## Related
 
