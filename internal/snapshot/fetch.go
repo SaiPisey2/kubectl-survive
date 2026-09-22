@@ -83,5 +83,25 @@ func Fetch(ctx context.Context, cs kubernetes.Interface) (*Snapshot, error) {
 		s.StatefulSets = append(s.StatefulSets, &sts.Items[i])
 	}
 
+	// Services and EndpointSlices back the dependency graph (spec §5.5):
+	// EndpointSlices are the truth about who actually serves a Service, and
+	// Services are needed to know a referenced DNS name is real rather than
+	// an unrelated env var value that happens to look like one.
+	svcs, err := cs.CoreV1().Services(metav1.NamespaceAll).List(ctx, all)
+	if err != nil {
+		return nil, fmt.Errorf("list services: %w", err)
+	}
+	for i := range svcs.Items {
+		s.Services = append(s.Services, &svcs.Items[i])
+	}
+
+	slices, err := cs.DiscoveryV1().EndpointSlices(metav1.NamespaceAll).List(ctx, all)
+	if err != nil {
+		return nil, fmt.Errorf("list endpointslices: %w", err)
+	}
+	for i := range slices.Items {
+		s.EndpointSlices = append(s.EndpointSlices, &slices.Items[i])
+	}
+
 	return s, nil
 }
