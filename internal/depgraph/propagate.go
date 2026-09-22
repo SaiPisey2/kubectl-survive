@@ -60,8 +60,15 @@ func dfs(g *Graph, ref workload.Ref, lostOrUnknown, visited map[workload.Ref]boo
 	cur := append(append([]string{}, path...), ref.Name)
 
 	for _, e := range g.byFrom[ref] {
-		if e.Unresolved {
+		if e.Kind == EdgeUnresolved {
 			return true, append(append([]string{}, cur...), e.Service.String()+" (unresolved service)")
+		}
+		if e.Kind == EdgeExternal || e.Kind == EdgeUnattributable {
+			// Never impairing (spec §5.5, ruling on ExternalName and
+			// selectorless Services): the Service points outside the
+			// cluster, or its endpoints can't be attributed to a workload
+			// at all, so there is nothing here to walk into.
+			continue
 		}
 		for _, backer := range e.Backers {
 			if lostOrUnknown[backer] {

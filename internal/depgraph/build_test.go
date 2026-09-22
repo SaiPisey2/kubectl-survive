@@ -106,8 +106,8 @@ func TestBuildCreatesEdgeFromLiteralEnvValue(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("got %d edges from web, want 1: %+v", len(edges), edges)
 	}
-	if edges[0].Unresolved {
-		t.Fatal("edge reported unresolved, want resolved to session-store")
+	if edges[0].Kind != EdgeResolved {
+		t.Fatalf("edge Kind = %v, want EdgeResolved", edges[0].Kind)
 	}
 	if len(edges[0].Backers) != 1 || edges[0].Backers[0] != sessionStore {
 		t.Errorf("backers = %v, want [%v]", edges[0].Backers, sessionStore)
@@ -119,17 +119,24 @@ func TestBuildCreatesEdgeFromLiteralEnvValue(t *testing.T) {
 	}
 }
 
-// TestBuildMarksServiceWithNoEndpointsUnresolved proves ruling: "A Service
-// with no resolvable endpoints is unresolved, not 'has no backends' --
-// record it, never assert through it."
+// TestBuildMarksServiceWithNoEndpointsUnresolved proves ruling 3: "A Service
+// with a selector but no resolvable endpoints is unresolved, not 'has no
+// backends' -- record it, never assert through it." This is a regression
+// guard: the Service fixture carries a real selector, so it is not the
+// ExternalName or selectorless case, which classify differently (see
+// TestBuildMarksExternalNameServiceExternal and
+// TestBuildMarksSelectorlessServiceWithNoBackersUnattributable below).
 func TestBuildMarksServiceWithNoEndpointsUnresolved(t *testing.T) {
 	webPod := podOwnedBy("web-1", "default", "Deployment", "web", []corev1.Container{{
 		Name: "c",
 		Env:  []corev1.EnvVar{{Name: "CACHE_ADDR", Value: "http://cache:6379"}},
 	}})
 	s := &snapshot.Snapshot{
-		Pods:     []*corev1.Pod{webPod},
-		Services: []*corev1.Service{{ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: "default"}}},
+		Pods: []*corev1.Pod{webPod},
+		Services: []*corev1.Service{{
+			ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: "default"},
+			Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "cache"}},
+		}},
 		// No EndpointSlice for "cache" at all: the Service exists but backs
 		// nothing resolvable.
 	}
@@ -141,8 +148,8 @@ func TestBuildMarksServiceWithNoEndpointsUnresolved(t *testing.T) {
 	if len(edges) != 1 {
 		t.Fatalf("got %d edges from web, want 1: %+v", len(edges), edges)
 	}
-	if !edges[0].Unresolved {
-		t.Error("edge to a Service with no EndpointSlice should be Unresolved")
+	if edges[0].Kind != EdgeUnresolved {
+		t.Errorf("edge Kind = %v, want EdgeUnresolved (selector-backed, no endpoints)", edges[0].Kind)
 	}
 	if len(edges[0].Backers) != 0 {
 		t.Errorf("Backers = %v, want none", edges[0].Backers)
@@ -151,6 +158,126 @@ func TestBuildMarksServiceWithNoEndpointsUnresolved(t *testing.T) {
 	deps := g.DependsOn(web)
 	if len(deps) != 1 || deps[0] != "default/cache (unresolved service)" {
 		t.Errorf("DependsOn(web) = %v, want [default/cache (unresolved service)]", deps)
+	}
+}
+
+// TestBuildMarksExternalNameServiceExternal proves ruling 1: an ExternalName
+// Service points outside the cluster by definition, so it is never
+// impairing -- classified EdgeExternal, shown in DependsOn marked
+// "(external)", with no Backers asserted.
+func TestBuildMarksExternalNameServiceExternal(t *testing.T) {
+	webPod := podOwnedBy("web-1", "default", "Deployment", "web", []corev1.Container{{
+		Name: "c",
+		Env:  []corev1.EnvVar{{Name: "DB_ADDR", Value: "postgres://db:5432/app"}},
+	}})
+	s := &snapshot.Snapshot{
+		Pods: []*corev1.Pod{webPod},
+		Services: []*corev1.Service{{
+			ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "default"},
+			Spec: corev1.ServiceSpec{
+				Type:         corev1.ServiceTypeExternalName,
+				ExternalName: "prod.abc123.us-east-1.rds.amazonaws.com",
+			},
+		}},
+	}
+	idx := workload.NewIndex(s)
+	g := Build(s, idx)
+
+	web := workload.Ref{Kind: "Deployment", Namespace: "default", Name: "web"}
+	edges := g.byFrom[web]
+	if len(edges) != 1 {
+		t.Fatalf("got %d edges from web, want 1: %+v", len(edges), edges)
+	}
+	if edges[0].Kind != EdgeExternal {
+		t.Errorf("edge Kind = %v, want EdgeExternal", edges[0].Kind)
+	}
+	if len(edges[0].Backers) != 0 {
+		t.Errorf("Backers = %v, want none (ExternalName never resolves to a workload)", edges[0].Backers)
+	}
+
+	deps := g.DependsOn(web)
+	if len(deps) != 1 || deps[0] != "default/db (external)" {
+		t.Errorf("DependsOn(web) = %v, want [default/db (external)]", deps)
+	}
+}
+
+// TestBuildMarksSelectorlessServiceWithNoBackersUnattributable proves ruling
+// 2: a selectorless Service's endpoints are managed out of band and can't be
+// attributed to a zone when there's no Pod targetRef to prove otherwise --
+// classified EdgeUnattributable, never impairing.
+func TestBuildMarksSelectorlessServiceWithNoBackersUnattributable(t *testing.T) {
+	webPod := podOwnedBy("web-1", "default", "Deployment", "web", []corev1.Container{{
+		Name: "c",
+		Env:  []corev1.EnvVar{{Name: "CACHE_ADDR", Value: "http://cache:6379"}},
+	}})
+	s := &snapshot.Snapshot{
+		Pods: []*corev1.Pod{webPod},
+		Services: []*corev1.Service{{
+			ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: "default"},
+			// No Selector: endpoints are managed out of band (e.g. a manual
+			// Endpoints/EndpointSlice pointing at an off-cluster IP).
+		}},
+	}
+	idx := workload.NewIndex(s)
+	g := Build(s, idx)
+
+	web := workload.Ref{Kind: "Deployment", Namespace: "default", Name: "web"}
+	edges := g.byFrom[web]
+	if len(edges) != 1 {
+		t.Fatalf("got %d edges from web, want 1: %+v", len(edges), edges)
+	}
+	if edges[0].Kind != EdgeUnattributable {
+		t.Errorf("edge Kind = %v, want EdgeUnattributable", edges[0].Kind)
+	}
+
+	deps := g.DependsOn(web)
+	if len(deps) != 1 || deps[0] != "default/cache (not attributable)" {
+		t.Errorf("DependsOn(web) = %v, want [default/cache (not attributable)]", deps)
+	}
+}
+
+// TestBuildResolvesSelectorlessServiceThroughPodTargetRef proves the
+// selectorless exception: when a selectorless Service's EndpointSlice DOES
+// carry a Pod targetRef that resolves to a workload, that's proof, and the
+// edge is a normal EdgeResolved one -- impairment propagates through it like
+// any other resolved dependency.
+func TestBuildResolvesSelectorlessServiceThroughPodTargetRef(t *testing.T) {
+	backendPod := podOwnedBy("cache-0", "default", "StatefulSet", "cache", nil)
+	webPod := podOwnedBy("web-1", "default", "Deployment", "web", []corev1.Container{{
+		Name: "c",
+		Env:  []corev1.EnvVar{{Name: "CACHE_ADDR", Value: "http://cache:6379"}},
+	}})
+	s := &snapshot.Snapshot{
+		Pods: []*corev1.Pod{backendPod, webPod},
+		Services: []*corev1.Service{{
+			ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: "default"},
+			// No Selector, but the EndpointSlice below still carries a Pod
+			// targetRef -- proof enough to resolve it.
+		}},
+		EndpointSlices: []*discoveryv1.EndpointSlice{
+			endpointSlice("cache-abcde", "default", "cache",
+				corev1.ObjectReference{Kind: "Pod", Namespace: "default", Name: "cache-0"}),
+		},
+	}
+	idx := workload.NewIndex(s)
+	g := Build(s, idx)
+
+	web := workload.Ref{Kind: "Deployment", Namespace: "default", Name: "web"}
+	cache := workload.Ref{Kind: "StatefulSet", Namespace: "default", Name: "cache"}
+	edges := g.byFrom[web]
+	if len(edges) != 1 {
+		t.Fatalf("got %d edges from web, want 1: %+v", len(edges), edges)
+	}
+	if edges[0].Kind != EdgeResolved {
+		t.Errorf("edge Kind = %v, want EdgeResolved (Pod targetRef proves the backer)", edges[0].Kind)
+	}
+	if len(edges[0].Backers) != 1 || edges[0].Backers[0] != cache {
+		t.Errorf("Backers = %v, want [%v]", edges[0].Backers, cache)
+	}
+
+	deps := g.DependsOn(web)
+	if len(deps) != 1 || deps[0] != cache.String() {
+		t.Errorf("DependsOn(web) = %v, want [%s]", deps, cache.String())
 	}
 }
 

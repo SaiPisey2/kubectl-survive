@@ -245,7 +245,12 @@ go test -tags harness ./test/harness/    # requires Docker and kwokctl
   Secrets are never followed, so a dependency wired only through one of those
   is invisible here -- it is a missing edge, not a false one. Likewise, a
   Service whose selector matches pods but has no live EndpointSlice
-  attribution is reported unresolved rather than guessed at.
+  attribution is reported unresolved rather than guessed at. An
+  `ExternalName` Service and a selectorless Service (endpoints managed out
+  of band, e.g. a manually-maintained Endpoints object) are shown as
+  dependencies but never reported as impairing, because their placement
+  can't be proven from the cluster -- a false edge is worse than a missing
+  one.
 - The ladder emits independent, individually actionable rungs (spec §6.1), so
   a workload whose only real remedy is a combination — for example a single
   replica in a single zone, which needs both more replicas and an enforced

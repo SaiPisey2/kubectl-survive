@@ -74,9 +74,9 @@ func TestImpairedTreatsUnresolvedServiceAsImpairing(t *testing.T) {
 	web := ref("Deployment", "web")
 
 	g := graphOf(Edge{
-		From:       web,
-		Service:    ServiceKey{Namespace: "default", Name: "ghost"},
-		Unresolved: true,
+		From:    web,
+		Service: ServiceKey{Namespace: "default", Name: "ghost"},
+		Kind:    EdgeUnresolved,
 	})
 
 	got := Impaired(g, "us-east-1a", nil, nil)
@@ -86,6 +86,66 @@ func TestImpairedTreatsUnresolvedServiceAsImpairing(t *testing.T) {
 	want := []string{"web", "default/ghost (unresolved service)"}
 	if !reflect.DeepEqual(got[0].Chain, want) {
 		t.Errorf("Chain = %v, want %v", got[0].Chain, want)
+	}
+}
+
+// TestImpairedNeverPropagatesThroughExternalNameService proves ruling 1: an
+// ExternalName Service (e.g. an RDS/Cloud SQL address wired through a
+// Service of that type) is never impairing, in any domain, no matter what
+// lostOrUnknown says -- it's a false edge if propagated, and a false edge is
+// worse than a missing one.
+func TestImpairedNeverPropagatesThroughExternalNameService(t *testing.T) {
+	web := ref("Deployment", "web")
+
+	g := graphOf(Edge{
+		From:    web,
+		Service: ServiceKey{Namespace: "default", Name: "db"},
+		Kind:    EdgeExternal,
+	})
+
+	got := Impaired(g, "us-east-1a", nil, nil)
+	if len(got) != 0 {
+		t.Fatalf("got %d impairments, want 0 (ExternalName never impairs): %+v", len(got), got)
+	}
+}
+
+// TestImpairedNeverPropagatesThroughUnattributableService proves ruling 2:
+// a selectorless Service with no resolvable Pod targetRef is never
+// impairing.
+func TestImpairedNeverPropagatesThroughUnattributableService(t *testing.T) {
+	web := ref("Deployment", "web")
+
+	g := graphOf(Edge{
+		From:    web,
+		Service: ServiceKey{Namespace: "default", Name: "cache"},
+		Kind:    EdgeUnattributable,
+	})
+
+	got := Impaired(g, "us-east-1a", nil, nil)
+	if len(got) != 0 {
+		t.Fatalf("got %d impairments, want 0 (unattributable Service never impairs): %+v", len(got), got)
+	}
+}
+
+// TestImpairedPropagatesThroughResolvedSelectorlessService proves that once
+// a selectorless Service's EndpointSlice DOES resolve to a real workload
+// (EdgeResolved), impairment propagates through it exactly like any other
+// resolved dependency.
+func TestImpairedPropagatesThroughResolvedSelectorlessService(t *testing.T) {
+	web := ref("Deployment", "web")
+	cache := ref("StatefulSet", "cache")
+
+	g := graphOf(Edge{
+		From:    web,
+		Service: ServiceKey{Namespace: "default", Name: "cache"},
+		Backers: []workload.Ref{cache},
+		Kind:    EdgeResolved,
+	})
+
+	lostOrUnknown := map[workload.Ref]bool{cache: true}
+	got := Impaired(g, "us-east-1a", lostOrUnknown, nil)
+	if len(got) != 1 {
+		t.Fatalf("got %d impairments, want 1 (resolved selectorless dependency must still impair)", len(got))
 	}
 }
 

@@ -31,6 +31,45 @@ type ServiceKey struct {
 
 func (k ServiceKey) String() string { return k.Namespace + "/" + k.Name }
 
+// EdgeKind classifies why an Edge does or doesn't carry real Backers, as an
+// explicit discriminator rather than a combination of booleans -- so the
+// three cases below can never blur into each other again (this replaced a
+// single Unresolved bool that conflated all three: a genuinely suspicious
+// unresolved Service was treated identically to a Service that can *never*
+// resolve to a workload, which meant a workload calling RDS through an
+// ExternalName Service was reported impaired, in every zone, permanently).
+type EdgeKind int
+
+const (
+	// EdgeResolved is a normal edge: the Service (selector-backed or
+	// selectorless) has at least one endpoint whose Pod targetRef resolves
+	// to an owning workload, recorded in Backers.
+	EdgeResolved EdgeKind = iota
+
+	// EdgeUnresolved is a selector-backed Service with no resolvable
+	// endpoints -- genuinely suspicious (scaled to zero, crashlooping, or
+	// mislabelled) -- so it is recorded, never asserted through, and it
+	// propagates impairment (spec §5.5 ruling 3).
+	EdgeUnresolved
+
+	// EdgeExternal is an ExternalName Service: it points outside the
+	// cluster by definition (spec §5.6, cluster-external dependencies are
+	// invisible) and can never resolve to a workload. The edge is recorded
+	// so DependsOn shows it, marked "(external)", but it never propagates
+	// impairment: a false edge is worse than a missing one.
+	EdgeExternal
+
+	// EdgeUnattributable is a selectorless Service (any type other than
+	// ExternalName, with spec.selector nil or empty) whose EndpointSlices
+	// carry no Pod targetRef that resolves to a workload. Its endpoints are
+	// managed out of band -- often pointing outside the cluster -- so the
+	// tool cannot attribute them to a zone. Recorded, marked
+	// "(not attributable)", never impairing. A selectorless Service whose
+	// EndpointSlices DO carry a resolvable Pod targetRef is EdgeResolved
+	// instead, because then the backer can be proven.
+	EdgeUnattributable
+)
+
 // Edge is one workload's dependency on a Service, resolved (where possible)
 // to the workload(s) actually backing it.
 type Edge struct {
@@ -38,13 +77,12 @@ type Edge struct {
 	Service ServiceKey
 
 	// Backers is who EndpointSlice truth says actually serves this Service,
-	// resolved to their owning workload. Empty when Unresolved.
+	// resolved to their owning workload. Empty unless Kind is EdgeResolved.
 	Backers []workload.Ref
 
-	// Unresolved is true when the Service has no resolvable endpoints. Per
-	// spec §5.5, this is recorded, never asserted through: the dependency is
-	// real but its target is unknown, not "no dependency".
-	Unresolved bool
+	// Kind says why this edge does or doesn't have real Backers. See
+	// EdgeKind.
+	Kind EdgeKind
 }
 
 // Graph is the dependency edge set, built once from a Snapshot. It holds no
@@ -57,16 +95,22 @@ type Graph struct {
 
 // DependsOn returns ref's direct dependencies as display strings, for the
 // report's "dependsOn" field (spec §8.4): resolved backers by "<ns>/<name>",
-// unresolved Services named and marked explicitly.
+// unresolved, external and not-attributable Services named and marked
+// explicitly.
 func (g *Graph) DependsOn(ref workload.Ref) []string {
 	var out []string
 	for _, e := range g.byFrom[ref] {
-		if e.Unresolved {
+		switch e.Kind {
+		case EdgeUnresolved:
 			out = append(out, e.Service.String()+" (unresolved service)")
-			continue
-		}
-		for _, b := range e.Backers {
-			out = append(out, b.String())
+		case EdgeExternal:
+			out = append(out, e.Service.String()+" (external)")
+		case EdgeUnattributable:
+			out = append(out, e.Service.String()+" (not attributable)")
+		default:
+			for _, b := range e.Backers {
+				out = append(out, b.String())
+			}
 		}
 	}
 	sort.Strings(out)

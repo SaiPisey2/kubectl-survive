@@ -15,11 +15,14 @@ import (
 // the truth about who serves), and which workloads declare a dependency on a
 // Service by naming it in a literal container env var value.
 func Build(s *snapshot.Snapshot, idx *workload.Index) *Graph {
-	svcExists := map[ServiceKey]bool{}
+	svcByKey := map[ServiceKey]*corev1.Service{}
 	for _, svc := range s.Services {
-		svcExists[ServiceKey{Namespace: svc.Namespace, Name: svc.Name}] = true
+		svcByKey[ServiceKey{Namespace: svc.Namespace, Name: svc.Name}] = svc
 	}
-	exists := func(ns, name string) bool { return svcExists[ServiceKey{Namespace: ns, Name: name}] }
+	exists := func(ns, name string) bool {
+		_, ok := svcByKey[ServiceKey{Namespace: ns, Name: name}]
+		return ok
+	}
 
 	podByKey := map[string]*corev1.Pod{}
 	for _, p := range s.Pods {
@@ -95,7 +98,16 @@ func Build(s *snapshot.Snapshot, idx *workload.Index) *Graph {
 				}
 				sort.Slice(refs, func(i, j int) bool { return refs[i].String() < refs[j].String() })
 
-				e := Edge{From: ref, Service: key, Backers: refs, Unresolved: len(refs) == 0}
+				kind := classifyEdge(svcByKey[key], refs)
+				if kind == EdgeExternal {
+					// An ExternalName Service points outside the cluster by
+					// definition; it never resolves to a workload, so any
+					// EndpointSlice-derived refs (there normally are none)
+					// are dropped rather than asserted as Backers.
+					refs = nil
+				}
+
+				e := Edge{From: ref, Service: key, Backers: refs, Kind: kind}
 				g.Edges = append(g.Edges, e)
 				g.byFrom[ref] = append(g.byFrom[ref], e)
 			}
@@ -115,6 +127,40 @@ func Build(s *snapshot.Snapshot, idx *workload.Index) *Graph {
 	}
 
 	return g
+}
+
+// classifyEdge decides an Edge's EdgeKind from the matched Service's own
+// spec and the endpoint refs already resolved for it (see the ruling in
+// EdgeKind's doc comment):
+//
+//   - ExternalName Services point outside the cluster and can never resolve
+//     to a workload: always EdgeExternal, regardless of refs.
+//   - Selectorless Services (any other type, nil/empty spec.Selector) have
+//     endpoints managed out of band. If EndpointSlice truth still resolved
+//     a Pod targetRef to a workload, that's proof: EdgeResolved. Otherwise
+//     the tool cannot attribute the Service to a zone: EdgeUnattributable.
+//   - Everything else is a normal selector-backed Service: EdgeResolved
+//     when it has resolvable endpoints, EdgeUnresolved (and impairing)
+//     when it doesn't.
+//
+// svc is nil only if the matched key isn't in the snapshot's Services,
+// which matchServiceRef's exists() check already rules out; treated as a
+// normal selector-backed Service defensively.
+func classifyEdge(svc *corev1.Service, refs []workload.Ref) EdgeKind {
+	switch {
+	case svc != nil && svc.Spec.Type == corev1.ServiceTypeExternalName:
+		return EdgeExternal
+	case svc != nil && len(svc.Spec.Selector) == 0:
+		if len(refs) == 0 {
+			return EdgeUnattributable
+		}
+		return EdgeResolved
+	default:
+		if len(refs) == 0 {
+			return EdgeUnresolved
+		}
+		return EdgeResolved
+	}
 }
 
 func allContainers(pod *corev1.Pod) []corev1.Container {

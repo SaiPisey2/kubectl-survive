@@ -367,3 +367,60 @@ func TestDependencyImpairmentThroughTheRealEntryPoint(t *testing.T) {
 		}
 	}
 }
+
+// TestExternalNameDependencyProducesNoImpairedRows is the seam test for the
+// ExternalName ruling: web calls what looks like a database through a
+// Service of type ExternalName (the RDS/Cloud SQL pattern). Since an
+// ExternalName Service points outside the cluster and can never resolve to
+// a workload, this must never be reported as impairing, in any zone -- a
+// false edge is worse than a missing one. Driven through the real Analyze
+// entry point, not a hand-built depgraph.Graph, so a wiring defect anywhere
+// in the path would be caught. The companion check that this also produces
+// zero "IMPAIRED" rows in the rendered table lives in
+// internal/render.TestExternalNameDependencyRendersNoImpairedRows, since
+// render already depends on survive and importing render back here would
+// cycle.
+func TestExternalNameDependencyProducesNoImpairedRows(t *testing.T) {
+	webDep, webRS, webPods := deployWith("web", 2, []string{"n1a", "n1b"})
+	webPods[0].Spec.Containers = []corev1.Container{{
+		Name: "web",
+		Env: []corev1.EnvVar{
+			{Name: "DB_ADDR", Value: "postgres://db:5432/app"},
+		},
+	}}
+	webPods[1].Spec.Containers = webPods[0].Spec.Containers
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "default"},
+		Spec: corev1.ServiceSpec{
+			Type:         corev1.ServiceTypeExternalName,
+			ExternalName: "prod.abc123.us-east-1.rds.amazonaws.com",
+		},
+	}
+
+	s := &snapshot.Snapshot{
+		Nodes:       []*corev1.Node{testNode("n1a", "us-east-1a"), testNode("n1b", "us-east-1b")},
+		Pods:        webPods,
+		ReplicaSets: []*appsv1.ReplicaSet{webRS},
+		Deployments: []*appsv1.Deployment{webDep},
+		Services:    []*corev1.Service{svc},
+	}
+
+	r := Analyze(s, domain.LabelZone)
+
+	webV := verdictFor(r, "us-east-1a", "web")
+	if webV == nil || webV.Outcome != OutcomeSurvives {
+		t.Fatalf("web verdict = %+v, want OutcomeSurvives", webV)
+	}
+	wantDeps := []string{"default/db (external)"}
+	if len(webV.DependsOn) != 1 || webV.DependsOn[0] != wantDeps[0] {
+		t.Errorf("web.DependsOn = %v, want %v", webV.DependsOn, wantDeps)
+	}
+
+	for i := range r.Domains {
+		if r.Domains[i].Impaired != 0 {
+			t.Errorf("domain %s Impaired = %d, want 0 (ExternalName never impairs): %+v",
+				r.Domains[i].Domain, r.Domains[i].Impaired, r.Domains[i].Impairments)
+		}
+	}
+}
