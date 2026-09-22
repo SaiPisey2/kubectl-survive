@@ -5,6 +5,8 @@ on:
 
 permissions:
   contents: write
+  # Needed to publish the exporter image to GHCR.
+  packages: write
 
 jobs:
   release:
@@ -18,6 +20,11 @@ jobs:
       - run: go test ./... -count=1
       # goreleaser shells out to syft to attach an SBOM per archive.
       - uses: anchore/sbom-action/download-syft@v0
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"

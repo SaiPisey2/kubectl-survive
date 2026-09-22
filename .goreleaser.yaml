@@ -37,6 +37,25 @@ archives:
       - LICENSE
       - README.md
 
+# The exporter's container image. ko builds straight from the Go build above,
+# so there is no Dockerfile to drift from it, and the default base is a
+# distroless static image that runs as a non-root user -- which is what
+# deploy/deployment.yaml's runAsNonRoot requires.
+kos:
+  - id: exporter
+    build: kubectl-survive
+    main: ./cmd/kubectl-survive_zone
+    repositories: [ghcr.io/saipisey2/kubectl-survive]
+    tags: ["v{{ .Version }}", latest]
+    bare: true
+    preserve_import_paths: false
+    platforms: [linux/amd64, linux/arm64]
+    sbom: none
+    labels:
+      org.opencontainers.image.source: https://github.com/SaiPisey2/kubectl-survive
+      org.opencontainers.image.description: Prometheus exporter for kubectl survive-zone
+      org.opencontainers.image.licenses: Apache-2.0
+
 checksum:
   name_template: checksums.txt
 

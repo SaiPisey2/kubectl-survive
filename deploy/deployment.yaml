@@ -1,10 +1,5 @@
-# No container image is published by .goreleaser.yaml yet -- only the krew
-# binary archives are. The image reference below is a placeholder for
-# whichever registry that gets wired up in; build one locally with a
-# Dockerfile that just COPYs the kubectl-survive_zone binary in and runs
-# `kubectl-survive_zone export` as the entrypoint, or run the binary directly
-# on a host with in-cluster kubeconfig, if you want to try this before that
-# lands.
+# The image is built by the release workflow with ko and published to GHCR for
+# linux/amd64 and linux/arm64. Pin it to the release you are running.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,9 +20,11 @@ spec:
       serviceAccountName: kubectl-survive-exporter
       containers:
         - name: exporter
-          image: ghcr.io/saipisey2/kubectl-survive:v0.2.1
+          image: ghcr.io/saipisey2/kubectl-survive:v0.4.0
+          # The image's entrypoint is the plugin binary itself, so the first
+          # argument is the subcommand. Prefixing it with the plugin name, as
+          # kubectl does on the command line, fails with "unknown command".
           args:
-            - survive-zone
             - export
             - --listen=:9090
             - --domain-key=topology.kubernetes.io/zone
