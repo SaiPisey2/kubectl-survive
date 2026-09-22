@@ -7,6 +7,7 @@ import (
 	"github.com/SaiPisey2/kubectl-survive/internal/snapshot"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -267,6 +268,102 @@ func TestOnlyReplicaPinnedToRemovedDomainIsLost(t *testing.T) {
 		}
 		if dr.Lost != 1 {
 			t.Errorf("domain totals = %d lost; want exactly 1 lost", dr.Lost)
+		}
+	}
+}
+
+// TestDependencyImpairmentThroughTheRealEntryPoint is the seam test: it goes
+// from a *snapshot.Snapshot through the real Analyze entry point (not a
+// hand-built depgraph.Graph) to the rendered impairment, so a wiring defect
+// in Analyze itself -- the kind every hand-built-input test would miss --
+// gets caught. web's own pods are spread across two zones so it survives on
+// its own; session-store has its only replica in us-east-1a. web depends on
+// session-store through a literal env var naming the Service in host
+// position, resolved via a real Service + EndpointSlice pair.
+func TestDependencyImpairmentThroughTheRealEntryPoint(t *testing.T) {
+	webDep, webRS, webPods := deployWith("web", 2, []string{"n1a", "n1b"})
+	webPods[0].Spec.Containers = []corev1.Container{{
+		Name: "web",
+		Env: []corev1.EnvVar{
+			{Name: "SESSION_STORE_ADDR", Value: "http://session-store:6379"},
+		},
+	}}
+	webPods[1].Spec.Containers = webPods[0].Spec.Containers
+
+	storeDep, storeRS, storePods := deployWith("session-store", 1, []string{"n1a"})
+
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "session-store", Namespace: "default"},
+	}
+	slice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "session-store-abc",
+			Namespace: "default",
+			Labels:    map[string]string{discoveryv1.LabelServiceName: "session-store"},
+		},
+		Endpoints: []discoveryv1.Endpoint{{
+			TargetRef: &corev1.ObjectReference{
+				Kind:      "Pod",
+				Namespace: "default",
+				Name:      storePods[0].Name,
+			},
+		}},
+	}
+
+	s := &snapshot.Snapshot{
+		Nodes:          []*corev1.Node{testNode("n1a", "us-east-1a"), testNode("n1b", "us-east-1b")},
+		Pods:           append(append([]*corev1.Pod{}, webPods...), storePods...),
+		ReplicaSets:    []*appsv1.ReplicaSet{webRS, storeRS},
+		Deployments:    []*appsv1.Deployment{webDep, storeDep},
+		Services:       []*corev1.Service{svc},
+		EndpointSlices: []*discoveryv1.EndpointSlice{slice},
+	}
+
+	r := Analyze(s, domain.LabelZone)
+
+	// Ruling 1: web's own pod-level outcome is untouched by the dependency.
+	webV := verdictFor(r, "us-east-1a", "web")
+	if webV == nil || webV.Outcome != OutcomeSurvives {
+		t.Fatalf("web verdict = %+v, want OutcomeSurvives (own pods survive us-east-1a)", webV)
+	}
+	wantDeps := []string{"default/session-store"}
+	if len(webV.DependsOn) != 1 || webV.DependsOn[0] != wantDeps[0] {
+		t.Errorf("web.DependsOn = %v, want %v", webV.DependsOn, wantDeps)
+	}
+
+	storeV := verdictFor(r, "us-east-1a", "session-store")
+	if storeV == nil || storeV.Outcome != OutcomeLost {
+		t.Fatalf("session-store verdict = %+v, want OutcomeLost", storeV)
+	}
+
+	var dr *DomainResult
+	for i := range r.Domains {
+		if r.Domains[i].Domain == "us-east-1a" {
+			dr = &r.Domains[i]
+		}
+	}
+	if dr == nil {
+		t.Fatal("no DomainResult for us-east-1a")
+	}
+	if dr.Impaired != 1 {
+		t.Fatalf("Impaired = %d, want 1: %+v", dr.Impaired, dr.Impairments)
+	}
+	imp := dr.Impairments[0]
+	if imp.Workload.Name != "web" {
+		t.Errorf("impaired workload = %v, want web", imp.Workload)
+	}
+	wantChain := []string{"web", "session-store"}
+	if len(imp.Chain) != len(wantChain) || imp.Chain[0] != wantChain[0] || imp.Chain[1] != wantChain[1] {
+		t.Errorf("Chain = %v, want %v", imp.Chain, wantChain)
+	}
+
+	// The zone where session-store is unaffected must show no impairment.
+	if v := verdictFor(r, "us-east-1b", "session-store"); v == nil || v.Outcome != OutcomeSurvives {
+		t.Fatalf("session-store verdict in us-east-1b = %+v, want OutcomeSurvives", v)
+	}
+	for i := range r.Domains {
+		if r.Domains[i].Domain == "us-east-1b" && r.Domains[i].Impaired != 0 {
+			t.Errorf("us-east-1b Impaired = %d, want 0", r.Domains[i].Impaired)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/SaiPisey2/kubectl-survive/internal/depgraph"
 	"github.com/SaiPisey2/kubectl-survive/internal/domain"
 	"github.com/SaiPisey2/kubectl-survive/internal/health"
 	"github.com/SaiPisey2/kubectl-survive/internal/pdbcheck"
@@ -24,6 +25,7 @@ type agg struct {
 func Analyze(s *snapshot.Snapshot, domainKey string) *Report {
 	groups, unlabelled := domain.Group(s.Nodes, domainKey)
 	idx := workload.NewIndex(s)
+	graph := depgraph.Build(s, idx)
 
 	nodeDomain := map[string]string{}
 	for d, names := range groups {
@@ -95,6 +97,7 @@ func Analyze(s *snapshot.Snapshot, domainKey string) *Report {
 				Placement:    placement,
 				Spread:       spread.Classify(podSpread(a.pods), domainKey, replicas, len(domains)),
 				AntiAffinity: spread.ClassifyAntiAffinity(podAffinity(a.pods), domainKey),
+				DependsOn:    graph.DependsOn(ref),
 			}
 			// A StatefulSet binds a different PV per replica through
 			// volumeClaimTemplates, so every pod is checked, not just the
@@ -188,6 +191,25 @@ func Analyze(s *snapshot.Snapshot, domainKey string) *Report {
 
 			res.Verdicts = append(res.Verdicts, v)
 		}
+
+		// Dependency impairment is a separate layer from Lost/Degraded
+		// (ruling 1): a workload's own pods can survive losing d while it is
+		// still impaired because something it depends on, transitively
+		// through Services, is lost or unknown in d.
+		lostOrUnknown := map[workload.Ref]bool{}
+		ownLost := map[workload.Ref]bool{}
+		for _, v := range res.Verdicts {
+			switch v.Outcome {
+			case OutcomeLost, OutcomeUnknown:
+				lostOrUnknown[v.Workload] = true
+			}
+			if v.Outcome == OutcomeLost {
+				ownLost[v.Workload] = true
+			}
+		}
+		res.Impairments = depgraph.Impaired(graph, d, lostOrUnknown, ownLost)
+		res.Impaired = len(res.Impairments)
+
 		report.Domains = append(report.Domains, res)
 	}
 	return report
