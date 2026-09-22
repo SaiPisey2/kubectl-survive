@@ -107,6 +107,28 @@ to `--out-dir`, and never touches the cluster itself.
   recovers and the budget refuses every later eviction. Seeing this needs the
   real scheduler, not arithmetic, which is why it is reported alongside the
   PDB findings above rather than folded into them.
+- **Dependency-driven impairment.** Survivability is a graph property, not
+  just a per-workload one: a workload whose own pods survive a domain's loss
+  can still be **impaired by a dependency** if something it depends on --
+  transitively, through Services -- is lost or unknown there. This is
+  reported as a separate layer from a workload's own outcome, never folded
+  into it: a workload's `survives`/`degraded`/`lost`/`unknown` verdict is
+  always defined purely by its own pods. Edges are built only from evidence
+  that is provably real:
+  - **Service -> backing workload**, from `EndpointSlice` endpoints whose
+    `targetRef` is a Pod. EndpointSlices are the ground truth for who a
+    Service actually serves; a Service's selector is only intent. A Service
+    with no resolvable endpoints is reported **unresolved** -- which counts
+    as impairing, the same as "unknown" -- rather than asserted through or
+    silently dropped as "no dependency".
+  - **Workload -> Service**, from a container's literal env var `value`
+    naming the Service by DNS: `svc`, `svc.ns`, `svc.ns.svc`, or
+    `svc.ns.svc.<cluster-domain>`. The bare short form `svc` is only accepted
+    when the workload is in that Service's own namespace *and* the name
+    appears in host position (a URL host, or `host:port`) -- never as a bare
+    word alone, since a bare word gives no proof it names anything.
+  - A dependency is only asserted when it can be proven; a missing edge is
+    preferable to a false one.
 
 It is read-only. It never evicts, cordons, or deletes anything.
 
@@ -217,9 +239,13 @@ go test -tags harness ./test/harness/    # requires Docker and kwokctl
   gone and a PodDisruptionBudget offers no protection, so a workload can be
   reported lost here while surviving a `kubectl drain` indefinitely. Both facts
   are true and are reported separately.
-- Dependencies between workloads are not yet modelled. A service spread across
-  three zones is still reported as surviving even if the database it calls has
-  its only replica in the zone that vanished.
+- Dependency edges are read-only by construction (spec §11 wins over §5.5
+  where they conflict): only a container's literal env var `value` is ever
+  read. `valueFrom`, `envFrom`, and the contents of mounted ConfigMaps or
+  Secrets are never followed, so a dependency wired only through one of those
+  is invisible here -- it is a missing edge, not a false one. Likewise, a
+  Service whose selector matches pods but has no live EndpointSlice
+  attribution is reported unresolved rather than guessed at.
 - The ladder emits independent, individually actionable rungs (spec §6.1), so
   a workload whose only real remedy is a combination — for example a single
   replica in a single zone, which needs both more replicas and an enforced
