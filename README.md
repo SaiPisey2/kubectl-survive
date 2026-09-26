@@ -1,5 +1,8 @@
 # kubectl survive-zone
 
+[![krew](https://img.shields.io/badge/krew-survive--zone-326ce5?logo=kubernetes&logoColor=white)](https://krew.sigs.k8s.io/plugins/)
+[![release](https://img.shields.io/github/v/release/SaiPisey2/kubectl-survive)](https://github.com/SaiPisey2/kubectl-survive/releases)
+
 Find out whether your cluster actually survives losing a zone.
 
 Most teams believe they are multi-AZ because the manifests say so. The manifests
@@ -19,7 +22,13 @@ would still go dark with one zone. See [demo/](demo/) to reproduce it.
 
 ## Install
 
-Download a binary for your platform from the
+With [krew](https://krew.sigs.k8s.io/), the kubectl plugin manager:
+
+```sh
+kubectl krew install survive-zone
+```
+
+Or download a binary for your platform from the
 [releases page](https://github.com/SaiPisey2/kubectl-survive/releases), or:
 
 ```sh
